@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Jarvis">
+<title>Jarvis</title>
+<style>
+:root{--bg:#0d1520;--panel:#16212f;--text:#e8eef5;--muted:#8fa1b5;--accent:#4cc9f0;--me:#22344a;--danger:#ff6b6b}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:17px/1.45 -apple-system,"Helvetica Neue",Arial,sans-serif;display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px}
+h1{font-size:20px;margin:0;font-weight:600;letter-spacing:.04em}
+header button{background:none;border:1px solid #2c3e54;color:var(--muted);border-radius:10px;padding:8px 12px;font-size:15px}
+#log{flex:1;overflow-y:auto;padding:8px 18px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:80%;padding:10px 14px;border-radius:16px;white-space:pre-wrap}
+.me{align-self:flex-end;background:var(--me)}
+.ai{align-self:flex-start;background:var(--panel)}
+.sys{align-self:center;color:var(--muted);font-size:15px;text-align:center}
+footer{padding:12px 18px 18px;display:flex;flex-direction:column;align-items:center;gap:12px}
+#status{color:var(--muted);min-height:22px;font-size:15px}
+#mic{width:96px;height:96px;border-radius:50%;border:0;background:var(--accent);color:#06222e;font-size:38px;transition:transform .15s}
+#mic.listening{background:var(--danger);animation:pulse 1.2s infinite}
+#mic.thinking{background:#f4c95d}
+#mic.speaking{background:#7bd88f}
+@keyframes pulse{50%{transform:scale(1.08)}}
+@media (prefers-reduced-motion:reduce){#mic.listening{animation:none}}
+label.opt{color:var(--muted);font-size:15px;display:flex;gap:8px;align-items:center}
+#settings{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);align-items:center;justify-content:center;padding:20px}
+#settings.open{display:flex}
+.card{background:var(--panel);border-radius:18px;padding:20px;width:100%;max-width:460px}
+.card h2{margin:0 0 12px;font-size:18px}
+.card input{width:100%;padding:12px;border-radius:10px;border:1px solid #2c3e54;background:var(--bg);color:var(--text);font-size:16px;margin:4px 0 12px}
+.card textarea{width:100%;height:110px;padding:12px;border-radius:10px;border:1px solid #2c3e54;background:var(--bg);color:var(--text);font-size:15px;margin:4px 0 12px}
+.card .row{display:flex;gap:10px;justify-content:flex-end}
+.card button{padding:10px 16px;border-radius:10px;border:0;font-size:16px;background:var(--accent);color:#06222e}
+.card button.ghost{background:none;border:1px solid #2c3e54;color:var(--muted)}
+small{color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Jarvis</h1>
+  <button id="openSettings">Einstellungen</button>
+</header>
+<div id="log"></div>
+<footer>
+  <div id="status">Tippe aufs Mikrofon und sprich.</div>
+  <button id="mic" aria-label="Sprechen">🎤</button>
+  <label class="opt"><input type="checkbox" id="auto"> Dauergespräch (hört nach jeder Antwort wieder zu)</label>
+</footer>
+
+<div id="settings">
+  <div class="card">
+    <h2>Einstellungen</h2>
+    <label>Gemini-API-Schlüssel<br><small>Wird nur auf diesem Gerät gespeichert.</small></label>
+    <input id="key" type="password" autocomplete="off" placeholder="AIza...">
+    <label>Dein Name</label>
+    <input id="name" type="text" placeholder="z. B. Alex">
+    <label>Zusatzwissen (Stundenplan, Mails usw.)<br><small>Alles, was Jarvis wissen soll.</small></label>
+    <textarea id="wissen" placeholder="z. B. Morgen fällt die 3. Stunde Mathe aus."></textarea>
+    <div class="row">
+      <button class="ghost" id="reset">Gespräch löschen</button>
+      <button id="save">Speichern</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const MODEL = 'gemini-2.5-flash';
+const $ = id => document.getElementById(id);
+const store = {
+  get(k){ try{ return localStorage.getItem(k) || '' }catch(e){ return '' } },
+  set(k,v){ try{ localStorage.setItem(k,v) }catch(e){} }
+};
+let history = [];
+let recognition = null;
+let busy = false;
+
+function add(text, cls){
+  const d = document.createElement('div');
+  d.className = 'msg ' + cls; d.textContent = text;
+  $('log').appendChild(d); $('log').scrollTop = $('log').scrollHeight;
+}
+function setState(cls, text){
+  $('mic').className = cls; $('status').textContent = text;
+}
+
+// Einstellungen
+$('key').value = store.get('jv_key');
+$('name').value = store.get('jv_name');
+$('wissen').value = store.get('jv_wissen');
+$('openSettings').onclick = () => $('settings').classList.add('open');
+$('save').onclick = () => {
+  store.set('jv_key', $('key').value.trim());
+  store.set('jv_name', $('name').value.trim());
+  store.set('jv_wissen', $('wissen').value);
+  $('settings').classList.remove('open');
+};
+$('reset').onclick = () => { history = []; $('log').innerHTML = ''; $('settings').classList.remove('open'); };
+if(!store.get('jv_key')){ add('Willkommen! Öffne zuerst die Einstellungen und trage deinen Gemini-Schlüssel ein.', 'sys'); }
+
+function systemText(){
+  const name = store.get('jv_name') || 'dem Nutzer';
+  const wissen = store.get('jv_wissen');
+  return 'Du bist Jarvis, ein persönlicher KI-Assistent und sprichst mit ' + name + '. ' +
+    'Antworte auf Deutsch, locker, freundlich und kurz (meist 1 bis 3 Sätze), weil deine Antwort vorgelesen wird. ' +
+    'Keine Listen, kein Markdown, keine Sternchen, keine Emojis. ' +
+    'Heute ist ' + new Date().toLocaleString('de-DE', {dateStyle:'full', timeStyle:'short'}) + '. ' +
+    (wissen ? 'Aktuelles Wissen über den Nutzer:\n' + wissen : 'Du hast noch keinen Zugriff auf Mails oder Stundenplan. Sag das ehrlich, wenn danach gefragt wird.');
+}
+
+async function askGemini(text){
+  const key = store.get('jv_key');
+  if(!key) throw new Error('Kein API-Schlüssel eingetragen.');
+  history.push({role:'user', parts:[{text}]});
+  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + MODEL + ':generateContent', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','x-goog-api-key':key},
+    body: JSON.stringify({
+      systemInstruction:{parts:[{text:systemText()}]},
+      contents: history.slice(-20)
+    })
+  });
+  const data = await res.json();
+  if(!res.ok) throw new Error((data.error && data.error.message) || 'Fehler ' + res.status);
+  const out = (data.candidates && data.candidates[0] && data.candidates[0].content.parts.map(p=>p.text||'').join('')) || 'Dazu fällt mir gerade nichts ein.';
+  history.push({role:'model', parts:[{text:out}]});
+  return out;
+}
+
+function speak(text){
+  return new Promise(resolve => {
+    const synth = window.speechSynthesis;
+    if(!synth){ resolve(); return; }
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'de-DE';
+    const v = synth.getVoices().find(v => v.lang && v.lang.startsWith('de'));
+    if(v) u.voice = v;
+    u.onend = resolve; u.onerror = resolve;
+    synth.speak(u);
+  });
+}
+
+async function handle(text){
+  busy = true;
+  add(text, 'me');
+  setState('thinking', 'Jarvis denkt nach …');
+  try{
+    const answer = await askGemini(text);
+    add(answer, 'ai');
+    setState('speaking', 'Jarvis spricht … (tippe zum Unterbrechen)');
+    await speak(answer);
+  }catch(e){
+    add('Fehler: ' + e.message, 'sys');
+  }
+  busy = false;
+  setState('', 'Tippe aufs Mikrofon und sprich.');
+  if($('auto').checked && !document.hidden) listen();
+}
+
+function listen(){
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ add('Dieser Browser kann keine Spracherkennung. Bitte Safari nutzen.', 'sys'); return; }
+  recognition = new SR();
+  recognition.lang = 'de-DE';
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  let got = false;
+  recognition.onstart = () => setState('listening', 'Ich höre zu …');
+  recognition.onresult = e => { got = true; handle(e.results[0][0].transcript); };
+  recognition.onerror = e => {
+    got = true;
+    if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
+      add('Mikrofon oder Diktierfunktion nicht erlaubt. Prüfe in den iPad-Einstellungen: Tastatur → Diktierfunktion aktivieren, und erlaube Safari das Mikrofon.', 'sys');
+    } else if(e.error !== 'no-speech' && e.error !== 'aborted'){
+      add('Spracherkennung: ' + e.error, 'sys');
+    }
+    setState('', 'Tippe aufs Mikrofon und sprich.');
+  };
+  recognition.onend = () => { if(!got && !busy) setState('', 'Tippe aufs Mikrofon und sprich.'); };
+  recognition.start();
+}
+
+$('mic').onclick = () => {
+  if(window.speechSynthesis){ window.speechSynthesis.cancel(); }
+  if(recognition){ try{ recognition.abort(); }catch(e){} }
+  if(busy && $('mic').className === 'thinking') return;
+  busy = false;
+  listen();
+};
+if(window.speechSynthesis){ window.speechSynthesis.getVoices(); }
+</script>
+</body>
+</html>
