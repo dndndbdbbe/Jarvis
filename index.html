@@ -326,6 +326,43 @@ async function callGroq(key){
   if(!res.ok) throw new Error((data.error && data.error.message) || 'Groq-Fehler ' + res.status);
   return (data.choices && data.choices[0] && data.choices[0].message.content) || 'Dazu fällt mir gerade nichts ein.';
 }
+async function healGroq(key){
+  try{
+    const r = await fetch('https://api.groq.com/openai/v1/models', {headers:{Authorization:'Bearer ' + key}});
+    const d = await r.json(); if(!r.ok) return null;
+    const ids = (d.data || []).map(m => m.id).filter(id => !/whisper|guard|tts|prompt|playai|embed|orpheus|safeguard/i.test(id));
+    let pick = null;
+    for(const re of [/8b-instant/, /gpt-oss-20b/, /llama-3\.3-70b/, /gpt-oss-120b/, /llama/, /qwen/]){ pick = ids.find(id => re.test(id)); if(pick) break; }
+    pick = pick || ids[0];
+    if(!pick || pick === groqModel()) return null;
+    store.set('jv_groqmodel', pick); $('groqModel').value = pick;
+    add('Groq-Modell automatisch auf „' + pick + '“ gestellt.', 'sys');
+    return pick;
+  }catch(e){ return null; }
+}
+async function healGemini(key){
+  try{
+    const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=100', {headers:{'x-goog-api-key':key}});
+    const d = await r.json(); if(!r.ok) return null;
+    const names = (d.models || []).filter(m => (m.supportedGenerationMethods || []).includes('generateContent')).map(m => m.name.replace('models/', ''));
+    const stable = names.map(n => { const m = n.match(/^gemini-(\d+(?:\.\d+)?)-flash$/); return m ? [parseFloat(m[1]), n] : null; }).filter(Boolean).sort((a, b) => b[0] - a[0]);
+    const pick = stable.length ? stable[0][1] : names.find(n => /flash/.test(n) && !/image|tts|live|audio|embed/.test(n));
+    if(!pick || pick === model()) return null;
+    store.set('jv_model', pick); $('model').value = pick;
+    add('Gemini-Modell automatisch auf „' + pick + '“ gestellt.', 'sys');
+    return pick;
+  }catch(e){ return null; }
+}
+async function withHeal(call, heal, key){
+  try{ return await call(key); }
+  catch(e){
+    if(/does not exist|not found|no longer available|not supported|no access|decommission/i.test(e.message)){
+      const m = await heal(key);
+      if(m) return await call(key);
+    }
+    throw e;
+  }
+}
 async function askGemini(text){
   const gk = store.get('jv_key'), qk = store.get('jv_groq');
   if(!gk && !qk) throw new Error('Kein API-Schlüssel eingetragen.');
@@ -333,11 +370,11 @@ async function askGemini(text){
   history.push({role:'user', parts:[{text}]});
   let out, err1 = null;
   if(qk){
-    try{ out = await callGroq(qk); LASTUSED = 'groq'; }
+    try{ out = await withHeal(callGroq, healGroq, qk); LASTUSED = 'groq'; }
     catch(e){ err1 = e; }
   }
   if(out === undefined && gk){
-    try{ out = await callGemini(gk); LASTUSED = 'gemini'; }
+    try{ out = await withHeal(callGemini, healGemini, gk); LASTUSED = 'gemini'; }
     catch(e){ history.pop(); throw new Error(err1 ? err1.message + ' / ' + e.message : e.message); }
   }
   if(out === undefined){ history.pop(); throw err1 || new Error('Keine Antwort.'); }
