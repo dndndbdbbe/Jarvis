@@ -74,7 +74,19 @@ small{color:var(--muted)}
     <label>Stimme<br><small>Männliche deutsche Stimme wählen. Bessere Stimmen: iPad-Einstellungen → Bedienungshilfen → Gesprochene Inhalte → Stimmen → Deutsch.</small></label>
     <select id="voice"></select>
     <div class="row" style="justify-content:flex-start;margin:-4px 0 12px"><button class="ghost" id="testVoice" type="button">Stimme testen</button></div>
-    <label>KI-Modell<br><small>Wenn Jarvis zu lange braucht, ein anderes Modell probieren.</small></label>
+    <label>Tiefe der Stimme<br><small>Nach links wird die Stimme tiefer und männlicher.</small></label>
+    <input id="pitch" type="range" min="0.4" max="1.2" step="0.05">
+    <label>Verbindung zu Mail und Stundenplan<br><small>Link deines Apps-Script (siehe Anleitung).</small></label>
+    <input id="hub" type="url" autocomplete="off" autocapitalize="off" placeholder="https://script.google.com/macros/s/.../exec">
+    <label>Geheimwort der Verbindung</label>
+    <input id="token" type="password" autocomplete="off" placeholder="dein Geheimwort">
+    <div class="row" style="justify-content:flex-start;margin:-4px 0 12px"><button class="ghost" id="testHub" type="button">Verbindung testen</button></div>
+    <div id="hubStatus" style="color:var(--muted);font-size:14px;margin-bottom:12px"></div>
+    <label>Groq-Schlüssel (schnell, kostenlos)<br><small>Optional. Mit Schlüssel nimmt Jarvis zuerst Groq und bei Problemen Gemini.</small></label>
+    <input id="groq" type="password" autocomplete="off" placeholder="gsk_...">
+    <label>Groq-Modell</label>
+    <input id="groqModel" type="text" autocomplete="off" autocapitalize="off" placeholder="llama-3.1-8b-instant">
+    <label>KI-Modell (Gemini)<br><small>Wenn Jarvis zu lange braucht, ein anderes Modell probieren.</small></label>
     <input id="model" type="text" autocomplete="off" autocapitalize="off" placeholder="gemini-3.8-flash">
     <div class="row" style="justify-content:flex-start;margin:-4px 0 12px"><button class="ghost" id="listModels" type="button">Verfügbare Modelle zeigen</button></div>
     <div id="modelList" style="color:var(--muted);font-size:14px;margin-bottom:12px;word-break:break-all"></div>
@@ -95,6 +107,9 @@ const store = {
   set(k,v){ try{ localStorage.setItem(k,v) }catch(e){} }
 };
 function model(){ return store.get('jv_model') || DEFAULT_MODEL; }
+function groqModel(){ return store.get('jv_groqmodel') || 'llama-3.1-8b-instant'; }
+let LASTUSED = '';
+function activeModel(){ return (LASTUSED === 'groq' || (!LASTUSED && store.get('jv_groq'))) ? groqModel() : model(); }
 let history = [], recognition = null, busy = false, STATE = '';
 
 function add(text, cls){
@@ -114,7 +129,8 @@ function deVoices(){
 function pickVoice(){
   const vs = deVoices(), want = store.get('jv_voice');
   let v = vs.find(x => x.name === want);
-  if(!v){ for(const n of ['Martin','Markus','Yannick','Viktor','Stefan','Jonas','Hans']){ v = vs.find(x => x.name.includes(n)); if(v) break; } }
+  if(!v){ for(const n of ['Martin','Markus','Yannick','Viktor','Stefan','Jonas','Hans','Reed','Eddy','Rocko']){ v = vs.find(x => x.name.includes(n)); if(v) break; } }
+  if(!v){ v = vs.find(x => !/anna|helena|petra|marlene|vicki|katja|sabine|linda|ute|hedda|sandy|shelley|flo|grandma|female|weiblich/i.test(x.name)); }
   return v || vs[0];
 }
 function fillVoices(){
@@ -138,7 +154,7 @@ addEventListener('touchend', unlockSpeech);
 function speakChunk(text, voice){
   return new Promise(resolve => {
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'de-DE'; u.pitch = 0.85; u.rate = 0.98; u.volume = 1;
+    u.lang = 'de-DE'; u.pitch = parseFloat(store.get('jv_pitch') || '0.7'); u.rate = 0.95; u.volume = 1;
     if(voice) u.voice = voice;
     let started = false, done = false;
     const fin = ok => { if(!done){ done = true; clearTimeout(wd); resolve(ok); } };
@@ -176,15 +192,27 @@ $('key').value = store.get('jv_key');
 $('name').value = store.get('jv_name');
 $('wissen').value = store.get('jv_wissen');
 $('model').value = store.get('jv_model');
+$('groq').value = store.get('jv_groq');
+$('groqModel').value = store.get('jv_groqmodel');
+$('hub').value = store.get('jv_hub');
+$('token').value = store.get('jv_token');
+$('pitch').value = store.get('jv_pitch') || '0.7';
 fillVoices();
 $('openSettings').onclick = () => { fillVoices(); $('settings').classList.add('open'); };
+$('pitch').oninput = () => store.set('jv_pitch', $('pitch').value);
 $('testVoice').onclick = () => speak('Guten Tag. Alle Systeme laufen einwandfrei.', $('voice').value);
 $('save').onclick = () => {
   store.set('jv_key', $('key').value.trim());
   store.set('jv_name', $('name').value.trim());
   store.set('jv_wissen', $('wissen').value);
   store.set('jv_model', $('model').value.trim());
+  store.set('jv_groq', $('groq').value.trim());
+  store.set('jv_groqmodel', $('groqModel').value.trim());
   store.set('jv_voice', $('voice').value);
+  store.set('jv_hub', $('hub').value.trim());
+  store.set('jv_token', $('token').value.trim());
+  store.set('jv_pitch', $('pitch').value);
+  loadHub(false);
   $('settings').classList.remove('open');
 };
 $('listModels').onclick = async () => {
@@ -202,7 +230,57 @@ $('listModels').onclick = async () => {
   }catch(e){ out.textContent = 'Fehler: ' + e.message; }
 };
 $('reset').onclick = () => { history = []; $('log').innerHTML = ''; $('settings').classList.remove('open'); };
-if(!store.get('jv_key')){ add('Willkommen! Öffne zuerst die Einstellungen und trage deinen Gemini-Schlüssel ein.', 'sys'); }
+if(!store.get('jv_key') && !store.get('jv_groq')){ add('Willkommen! Öffne zuerst die Einstellungen und trage deinen Gemini-Schlüssel ein.', 'sys'); }
+
+/* ---------- Verbindung: Mails (und später Stundenplan) ---------- */
+let hub = null, hubAt = 0, hubFirst = true, hubTimer = null;
+const seenMails = new Set();
+const mailKey = m => m.von + '|' + m.betreff + '|' + m.datum;
+const mailName = m => (m.von || '').replace(/<.*>/, '').replace(/"/g, '').trim() || m.von;
+async function loadHub(announce){
+  const url = store.get('jv_hub'), tok = store.get('jv_token');
+  if(!url) return 'Kein Link eingetragen.';
+  try{
+    const r = await fetch(url + (url.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(tok));
+    const d = await r.json();
+    if(d.error) throw new Error(d.error);
+    hub = d; hubAt = Date.now();
+    const fresh = [];
+    (d.mails || []).forEach(m => {
+      const k = mailKey(m);
+      if(!m.gelesen && !seenMails.has(k)) fresh.push(m);
+      seenMails.add(k);
+    });
+    if(announce && !hubFirst && fresh.length && !busy) announceMail(fresh[0], fresh.length);
+    hubFirst = false;
+    return 'Verbindung ok:' + (d.stundenplan ? ' Stundenplan geladen.' : '') + (d.mails ? ' ' + d.mails.length + ' Mails geladen.' : '');
+  }catch(e){ return 'Fehler: ' + e.message; }
+}
+async function announceMail(m, n){
+  const txt = 'Neue Mail von ' + mailName(m) + ': ' + m.betreff + (n > 1 ? '. Dazu noch ' + (n-1) + ' weitere.' : '.');
+  busy = true; stopListening();
+  add(txt, 'ai');
+  await speak(txt);
+  busy = false; resume();
+}
+function hubText(){
+  if(!hub) return '';
+  let t = '';
+  if(hub.mails && hub.mails.length){
+    t += 'E-Mails der letzten Tage (neueste zuerst):\n' + hub.mails.map(m =>
+      '- ' + (m.gelesen ? '' : '[UNGELESEN] ') + 'Von ' + mailName(m) + ', Betreff: ' + m.betreff + '. Vorschau: ' + (m.text || '')).join('\n') + '\n' +
+      'Lies Mails nie komplett vor, fasse sie kurz zusammen.\n';
+  }
+  if(hub.stundenplan){ t += 'Stundenplan:\n' + hub.stundenplan + '\n'; }
+  return t;
+}
+$('testHub').onclick = async () => {
+  store.set('jv_hub', $('hub').value.trim()); store.set('jv_token', $('token').value.trim());
+  $('hubStatus').textContent = 'Teste …';
+  $('hubStatus').textContent = await loadHub(false);
+};
+loadHub(false);
+hubTimer = setInterval(() => { if(store.get('jv_hub')) loadHub(true); }, 180000);
 
 /* ---------- Gemini ---------- */
 function systemText(){
@@ -213,12 +291,9 @@ function systemText(){
     'Antworte auf Deutsch und kurz (meist 1 bis 3 Sätze), weil deine Antwort vorgelesen wird. ' +
     'Keine Listen, kein Markdown, keine Sternchen, keine Emojis. ' +
     'Heute ist ' + new Date().toLocaleString('de-DE', {dateStyle:'full', timeStyle:'short'}) + '. ' +
-    (wissen ? 'Aktuelles Wissen über den Nutzer:\n' + wissen : 'Du hast noch keinen Zugriff auf Mails oder Stundenplan. Sag das ehrlich, wenn danach gefragt wird.');
+    (hubText() ? 'Echte aktuelle Daten:\n' + hubText() : '') + (wissen ? 'Weiteres Wissen über den Nutzer:\n' + wissen : '') + (!hubText() && !wissen ? 'Du hast noch keinen Zugriff auf Mails oder Stundenplan. Sag das ehrlich, wenn danach gefragt wird.' : '');
 }
-async function askGemini(text){
-  const key = store.get('jv_key');
-  if(!key) throw new Error('Kein API-Schlüssel eingetragen.');
-  history.push({role:'user', parts:[{text}]});
+async function callGemini(key){
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 40000);
   let res;
@@ -228,11 +303,44 @@ async function askGemini(text){
       headers:{'Content-Type':'application/json','x-goog-api-key':key},
       body: JSON.stringify({ systemInstruction:{parts:[{text:systemText()}]}, contents: history.slice(-20) })
     });
-  }catch(e){ history.pop(); throw new Error(e.name === 'AbortError' ? 'Keine Antwort nach 40 Sekunden. Versuch es nochmal oder wähle in den Einstellungen ein schnelleres Modell.' : e.message); }
+  }catch(e){ throw new Error(e.name === 'AbortError' ? 'Gemini antwortet nicht (40 Sekunden). Versuch es nochmal oder wähle ein schnelleres Modell.' : e.message); }
   finally{ clearTimeout(timer); }
   const data = await res.json();
-  if(!res.ok){ history.pop(); throw new Error((data.error && data.error.message) || 'Fehler ' + res.status); }
-  const out = (data.candidates && data.candidates[0] && data.candidates[0].content.parts.map(p=>p.text||'').join('')) || 'Dazu fällt mir gerade nichts ein.';
+  if(!res.ok) throw new Error((data.error && data.error.message) || 'Fehler ' + res.status);
+  return (data.candidates && data.candidates[0] && data.candidates[0].content.parts.map(p=>p.text||'').join('')) || 'Dazu fällt mir gerade nichts ein.';
+}
+async function callGroq(key){
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 15000);
+  const msgs = [{role:'system', content: systemText()}].concat(history.slice(-20).map(h => ({role: h.role === 'model' ? 'assistant' : 'user', content: h.parts[0].text})));
+  let res;
+  try{
+    res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method:'POST', signal: ctl.signal,
+      headers:{'Content-Type':'application/json','Authorization':'Bearer ' + key},
+      body: JSON.stringify({ model: groqModel(), messages: msgs, max_tokens: 400, temperature: 0.7 })
+    });
+  }catch(e){ throw new Error(e.name === 'AbortError' ? 'Groq antwortet nicht.' : 'Groq nicht erreichbar: ' + e.message); }
+  finally{ clearTimeout(timer); }
+  const data = await res.json();
+  if(!res.ok) throw new Error((data.error && data.error.message) || 'Groq-Fehler ' + res.status);
+  return (data.choices && data.choices[0] && data.choices[0].message.content) || 'Dazu fällt mir gerade nichts ein.';
+}
+async function askGemini(text){
+  const gk = store.get('jv_key'), qk = store.get('jv_groq');
+  if(!gk && !qk) throw new Error('Kein API-Schlüssel eingetragen.');
+  if(store.get('jv_hub') && Date.now() - hubAt > 120000){ await Promise.race([loadHub(false), new Promise(r => setTimeout(r, 8000))]); }
+  history.push({role:'user', parts:[{text}]});
+  let out, err1 = null;
+  if(qk){
+    try{ out = await callGroq(qk); LASTUSED = 'groq'; }
+    catch(e){ err1 = e; }
+  }
+  if(out === undefined && gk){
+    try{ out = await callGemini(gk); LASTUSED = 'gemini'; }
+    catch(e){ history.pop(); throw new Error(err1 ? err1.message + ' / ' + e.message : e.message); }
+  }
+  if(out === undefined){ history.pop(); throw err1 || new Error('Keine Antwort.'); }
   history.push({role:'model', parts:[{text:out}]});
   return out;
 }
@@ -426,7 +534,7 @@ function frame(){
   g.textAlign = 'right';
   const lbl = {'':'BEREIT', listening:'HÖRT ZU', thinking:'ANALYSE', speaking:'ANTWORTET'}[STATE] || 'BEREIT';
   g.fillText(lbl, W-18, 84);
-  g.fillText(model().toUpperCase(), W-18, 100);
+  g.fillText(activeModel().toUpperCase(), W-18, 100);
   requestAnimationFrame(frame);
 }
 frame();
