@@ -38,6 +38,9 @@ label.opt{color:var(--muted);font-size:15px;display:flex;gap:8px;align-items:cen
 .card button{padding:10px 16px;border-radius:10px;border:0;font-size:16px;background:var(--accent);color:#06222e}
 .card button.ghost{background:none;border:1px solid #2c3e54;color:var(--muted)}
 small{color:var(--muted)}
+.typed{display:flex;gap:8px;width:100%;max-width:560px}
+.typed input{flex:1;padding:12px 14px;border-radius:12px;border:1px solid #2c3e54;background:var(--panel);color:var(--text);font-size:17px}
+.typed button{padding:0 18px;border-radius:12px;border:0;background:var(--accent);color:#06222e;font-size:16px}
 </style>
 </head>
 <body>
@@ -49,6 +52,7 @@ small{color:var(--muted)}
 <footer>
   <div id="status">Tippe aufs Mikrofon und sprich.</div>
   <button id="mic" aria-label="Sprechen">🎤</button>
+  <div class="typed"><input id="typed" type="text" placeholder="Oder hier tippen …" enterkeyhint="send"><button id="send">Senden</button></div>
   <label class="opt"><input type="checkbox" id="auto"> Dauergespräch (hört nach jeder Antwort wieder zu)</label>
 </footer>
 
@@ -69,7 +73,7 @@ small{color:var(--muted)}
 </div>
 
 <script>
-const MODEL = 'gemini-3.8-flash-lite';
+const MODEL = 'gemini-3.8-flash';
 const $ = id => document.getElementById(id);
 const store = {
   get(k){ try{ return localStorage.getItem(k) || '' }catch(e){ return '' } },
@@ -116,16 +120,23 @@ async function askGemini(text){
   const key = store.get('jv_key');
   if(!key) throw new Error('Kein API-Schlüssel eingetragen.');
   history.push({role:'user', parts:[{text}]});
-  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + MODEL + ':generateContent', {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 40000);
+  let res;
+  try{
+  res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + MODEL + ':generateContent', {
     method:'POST',
+    signal: ctl.signal,
     headers:{'Content-Type':'application/json','x-goog-api-key':key},
     body: JSON.stringify({
       systemInstruction:{parts:[{text:systemText()}]},
       contents: history.slice(-20)
     })
   });
+  }catch(e){ history.pop(); throw new Error(e.name === 'AbortError' ? 'Keine Antwort nach 40 Sekunden. Versuch es nochmal oder nimm ein schnelleres Modell.' : e.message); }
+  finally{ clearTimeout(timer); }
   const data = await res.json();
-  if(!res.ok) throw new Error((data.error && data.error.message) || 'Fehler ' + res.status);
+  if(!res.ok){ history.pop(); throw new Error((data.error && data.error.message) || 'Fehler ' + res.status); }
   const out = (data.candidates && data.candidates[0] && data.candidates[0].content.parts.map(p=>p.text||'').join('')) || 'Dazu fällt mir gerade nichts ein.';
   history.push({role:'model', parts:[{text:out}]});
   return out;
@@ -167,11 +178,16 @@ function listen(){
   if(!SR){ add('Dieser Browser kann keine Spracherkennung. Bitte Safari nutzen.', 'sys'); return; }
   recognition = new SR();
   recognition.lang = 'de-DE';
-  recognition.interimResults = false;
+  recognition.interimResults = true;
   recognition.maxAlternatives = 1;
   let got = false;
   recognition.onstart = () => setState('listening', 'Ich höre zu …');
-  recognition.onresult = e => { got = true; handle(e.results[0][0].transcript); };
+  recognition.onresult = e => {
+    const r = e.results[e.results.length - 1];
+    const t = r[0].transcript;
+    if(!r.isFinal){ $('status').textContent = '„' + t + '“'; return; }
+    got = true; handle(t);
+  };
   recognition.onerror = e => {
     got = true;
     if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
@@ -181,7 +197,7 @@ function listen(){
     }
     setState('', 'Tippe aufs Mikrofon und sprich.');
   };
-  recognition.onend = () => { if(!got && !busy) setState('', 'Tippe aufs Mikrofon und sprich.'); };
+  recognition.onend = () => { if(!got && !busy){ setState('', 'Nichts verstanden. Tippe nochmal aufs Mikrofon oder tippe unten.'); } };
   recognition.start();
 }
 
@@ -192,6 +208,15 @@ $('mic').onclick = () => {
   busy = false;
   listen();
 };
+function sendTyped(){
+  const v = $('typed').value.trim();
+  if(!v || busy) return;
+  $('typed').value = '';
+  if(window.speechSynthesis){ window.speechSynthesis.cancel(); }
+  handle(v);
+}
+$('send').onclick = sendTyped;
+$('typed').addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); sendTyped(); } });
 if(window.speechSynthesis){ window.speechSynthesis.getVoices(); }
 </script>
 </body>
