@@ -44,6 +44,9 @@ label.opt{color:var(--muted);font-size:14px;display:flex;gap:8px;align-items:cen
 .card button{padding:10px 16px;border-radius:10px;border:0;font-size:16px;background:var(--accent);color:#06222e}
 .card button.ghost{background:none;border:1px solid var(--line);color:var(--muted)}
 small{color:var(--muted)}
+#start{padding:18px 34px;border-radius:40px;border:2px solid rgba(255,255,255,.35);background:var(--accent);color:#06222e;font-size:20px;font-weight:600;box-shadow:0 0 28px rgba(76,201,240,.55)}
+#pill{padding:8px 16px;border-radius:20px;border:1px solid var(--line);background:rgba(10,22,36,.6);color:var(--accent);font-size:15px}
+#pill.off{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -55,10 +58,10 @@ small{color:var(--muted)}
 <div id="stage"></div>
 <div id="log"></div>
 <footer>
-  <div id="status">Tippe aufs Mikrofon und sprich.</div>
-  <button id="mic" aria-label="Sprechen">🎤</button>
+  <div id="status">Tippe auf „Jarvis aktivieren“.</div>
+  <button id="start">Jarvis aktivieren</button>
+  <button id="pill" hidden>● Hört zu</button>
   <div class="typed"><input id="typed" type="text" placeholder="Oder hier tippen …" enterkeyhint="send"><button id="send">Senden</button></div>
-  <label class="opt"><input type="checkbox" id="auto"> Dauergespräch (hört nach jeder Antwort wieder zu)</label>
 </footer>
 
 <div id="settings">
@@ -97,9 +100,10 @@ let history = [], recognition = null, busy = false, STATE = '';
 function add(text, cls){
   const d = document.createElement('div');
   d.className = 'msg ' + cls; d.textContent = text;
+  if(cls === 'ai'){ d.style.cursor = 'pointer'; d.title = 'Tippen zum Vorlesen'; d.onclick = async () => { stopListening(); await speak(text); resume(); }; }
   $('log').appendChild(d); $('log').scrollTop = $('log').scrollHeight;
 }
-function setState(cls, text){ STATE = cls; $('mic').className = cls; $('status').textContent = text; }
+function setState(cls, text){ STATE = cls; $('status').textContent = text; }
 
 /* ---------- Stimme ---------- */
 function deVoices(){
@@ -119,19 +123,52 @@ function fillVoices(){
   deVoices().forEach(v => { const o = document.createElement('option'); o.value = v.name; o.textContent = v.name; if(v.name === cur) o.selected = true; sel.appendChild(o); });
 }
 if(window.speechSynthesis){ speechSynthesis.onvoiceschanged = fillVoices; }
-function speak(text, voiceName){
+let speechUnlocked = false;
+function unlockSpeech(){
+  if(speechUnlocked || !window.speechSynthesis) return;
+  try{
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0; u.lang = 'de-DE';
+    speechSynthesis.speak(u);
+    speechSynthesis.getVoices();
+    speechUnlocked = true;
+  }catch(e){}
+}
+addEventListener('pointerdown', unlockSpeech);
+addEventListener('touchend', unlockSpeech);
+function speakChunk(text, voice){
   return new Promise(resolve => {
-    const synth = window.speechSynthesis;
-    if(!synth){ resolve(); return; }
-    synth.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'de-DE'; u.pitch = 0.85; u.rate = 0.98;
-    let v = pickVoice();
-    if(voiceName){ v = deVoices().find(x => x.name === voiceName) || v; }
-    if(v) u.voice = v;
-    u.onend = resolve; u.onerror = resolve;
-    synth.speak(u);
+    u.lang = 'de-DE'; u.pitch = 0.85; u.rate = 0.98; u.volume = 1;
+    if(voice) u.voice = voice;
+    let started = false, done = false;
+    const fin = ok => { if(!done){ done = true; clearTimeout(wd); resolve(ok); } };
+    const wd = setTimeout(() => { if(!started) fin(false); }, 3000);
+    u.onstart = () => { started = true; };
+    u.onend = () => fin(true);
+    u.onerror = () => fin(started);
+    speechSynthesis.speak(u);
   });
+}
+async function speak(text, voiceName){
+  const synth = window.speechSynthesis;
+  if(!synth){ add('Dieser Browser kann nicht sprechen.', 'sys'); return; }
+  synth.cancel();
+  await new Promise(r => setTimeout(r, 250));
+  try{ synth.resume(); }catch(e){}
+  let v = pickVoice();
+  if(voiceName){ v = deVoices().find(x => x.name === voiceName) || v; }
+  const parts = (text.match(/[^.!?]+[.!?]*\s*/g) || [text]).map(x => x.trim()).filter(Boolean);
+  let first = true;
+  for(const part of parts){
+    const ok = await speakChunk(part, v);
+    if(!ok && first){
+      if(v){ const ok2 = await speakChunk(part, null); if(ok2){ first = false; continue; } }
+      add('Kein Ton. Prüfe: Lautstärke hoch, iPad nicht stumm (Kontrollzentrum), Bluetooth aus. Tippe auf eine Antwort, um sie noch einmal vorzulesen.', 'sys');
+      return;
+    }
+    first = false;
+  }
 }
 
 /* ---------- Einstellungen ---------- */
@@ -201,6 +238,7 @@ async function askGemini(text){
 }
 async function handle(text){
   busy = true;
+  stopListening();
   add(text, 'me');
   setState('thinking', 'Jarvis denkt nach …');
   try{
@@ -210,43 +248,82 @@ async function handle(text){
     await speak(answer);
   }catch(e){ add('Fehler: ' + e.message, 'sys'); }
   busy = false;
-  setState('', 'Tippe aufs Mikrofon und sprich.');
-  if($('auto').checked && !document.hidden) listen();
+  if(active){
+    awakeUntil = Date.now() + 12000;
+    setState('listening', 'Ich höre zu … (du kannst direkt antworten)');
+    resume();
+    setTimeout(() => { if(Date.now() >= awakeUntil && !busy) idleStatus(); }, 12200);
+  } else idleStatus();
 }
-function listen(){
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if(!SR){ add('Dieser Browser kann keine Spracherkennung. Bitte Safari nutzen.', 'sys'); return; }
-  recognition = new SR();
-  recognition.lang = 'de-DE';
-  recognition.interimResults = true;
-  recognition.maxAlternatives = 1;
-  let got = false;
-  recognition.onstart = () => setState('listening', 'Ich höre zu …');
-  recognition.onresult = e => {
-    const r = e.results[e.results.length - 1];
-    const t = r[0].transcript;
-    if(!r.isFinal){ $('status').textContent = '„' + t + '“'; return; }
-    got = true; handle(t);
-  };
-  recognition.onerror = e => {
-    got = true;
-    if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
-      add('Mikrofon oder Diktierfunktion nicht erlaubt. Prüfe in den iPad-Einstellungen: Tastatur → Diktierfunktion aktivieren, und erlaube Safari das Mikrofon.', 'sys');
-    } else if(e.error !== 'no-speech' && e.error !== 'aborted'){
-      add('Spracherkennung: ' + e.error, 'sys');
+let active = false, awakeUntil = 0, rec = null, restartT = null, wakeLock = null;
+const WAKE = /(jarvis|jarwis|yarvis|charvis|tscharvis|dscharvis|jarves|jarvie|jarvi[sz])/i;
+function idleStatus(){ setState('', active ? 'Sag „Jarvis“, um mit mir zu sprechen.' : 'Tippe auf „Jarvis aktivieren“.'); }
+function stopListening(){
+  clearTimeout(restartT);
+  if(rec){ rec.onend = null; rec.onresult = null; rec.onerror = null; try{ rec.abort(); }catch(e){} rec = null; }
+}
+function resume(){
+  if(!active || busy || document.hidden) return;
+  clearTimeout(restartT);
+  restartT = setTimeout(startRec, 400);
+}
+function processFinal(t){
+  const m = t.match(WAKE);
+  let cmd = '';
+  if(m){
+    const before = t.slice(0, m.index).replace(/^(hey|hallo|hi|okay|ok|he)\b[\s,]*/i, '').trim();
+    const after = t.slice(m.index + m[0].length).replace(/^[\s,.:;!?-]+/, '').trim();
+    cmd = after || before;
+    if(!cmd){
+      awakeUntil = Date.now() + 8000;
+      setState('listening', 'Ja? Ich höre zu …');
+      setTimeout(() => { if(Date.now() >= awakeUntil && !busy) idleStatus(); }, 8200);
+      return;
     }
-    setState('', 'Tippe aufs Mikrofon und sprich.');
-  };
-  recognition.onend = () => { if(!got && !busy){ setState('', 'Nichts verstanden. Tippe nochmal aufs Mikrofon oder tippe unten.'); } };
-  recognition.start();
+  } else if(Date.now() < awakeUntil){ cmd = t; }
+  if(cmd){ awakeUntil = 0; handle(cmd); }
 }
-$('mic').onclick = () => {
-  if(window.speechSynthesis){ window.speechSynthesis.cancel(); }
-  if(recognition){ try{ recognition.abort(); }catch(e){} }
-  if(busy && $('mic').className === 'thinking') return;
-  busy = false;
-  listen();
-};
+function startRec(){
+  if(!active || busy || rec) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SR){ add('Dieser Browser kann keine Spracherkennung. Bitte Safari nutzen.', 'sys'); active = false; return; }
+  rec = new SR();
+  rec.lang = 'de-DE'; rec.continuous = true; rec.interimResults = true;
+  rec.onresult = e => {
+    for(let i = e.resultIndex; i < e.results.length; i++){
+      const r = e.results[i], t = r[0].transcript.trim();
+      if(!t) continue;
+      if(!r.isFinal){
+        if(Date.now() < awakeUntil || WAKE.test(t)) setState('listening', '„' + t + '“');
+      } else processFinal(t);
+    }
+  };
+  rec.onerror = e => {
+    if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
+      add('Mikrofon oder Diktierfunktion nicht erlaubt. Erlaube Safari das Mikrofon und schalte unter Einstellungen → Allgemein → Tastatur die Diktierfunktion ein.', 'sys');
+      pause();
+    }
+  };
+  rec.onend = () => { rec = null; if(active && !busy) resume(); };
+  try{ rec.start(); }catch(e){ rec = null; resume(); }
+}
+async function keepAwake(){ try{ if(navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); }catch(e){} }
+function activate(){
+  active = true; unlockSpeech(); keepAwake();
+  $('start').hidden = true; $('pill').hidden = false; $('pill').className = ''; $('pill').textContent = '● Hört zu';
+  idleStatus(); startRec();
+}
+function pause(){
+  active = false; stopListening();
+  $('pill').className = 'off'; $('pill').textContent = '○ Pausiert (tippen zum Starten)';
+  idleStatus();
+}
+$('start').onclick = activate;
+$('pill').onclick = () => { if(active) pause(); else activate(); };
+document.addEventListener('visibilitychange', () => {
+  if(document.hidden){ stopListening(); }
+  else if(active){ keepAwake(); resume(); }
+});
 function sendTyped(){
   const v = $('typed').value.trim();
   if(!v || busy) return;
