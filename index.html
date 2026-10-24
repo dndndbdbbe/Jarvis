@@ -45,6 +45,7 @@ label.opt{color:var(--muted);font-size:14px;display:flex;gap:8px;align-items:cen
 .card button.ghost{background:none;border:1px solid var(--line);color:var(--muted)}
 small{color:var(--muted)}
 #start{padding:18px 34px;border-radius:40px;border:2px solid rgba(255,255,255,.35);background:var(--accent);color:#06222e;font-size:20px;font-weight:600;box-shadow:0 0 28px rgba(76,201,240,.55)}
+#wake{padding:8px 14px;border-radius:20px;border:1px solid var(--line);background:rgba(10,22,36,.6);color:var(--muted);font-size:14px}
 #pill{padding:8px 16px;border-radius:20px;border:1px solid var(--line);background:rgba(10,22,36,.6);color:var(--accent);font-size:15px}
 #pill.off{color:var(--muted)}
 </style>
@@ -58,8 +59,9 @@ small{color:var(--muted)}
 <div id="stage"></div>
 <div id="log"></div>
 <footer>
-  <div id="status">Tippe auf „Jarvis aktivieren“.</div>
-  <button id="start">Jarvis aktivieren</button>
+  <div id="status">Tippe auf „Live-Gespräch starten“.</div>
+  <button id="start">Live-Gespräch starten</button>
+  <button id="wake">Nur Stichwort-Modus („Jarvis …“)</button>
   <button id="pill" hidden>● Hört zu</button>
   <div class="typed"><input id="typed" type="text" placeholder="Oder hier tippen …" enterkeyhint="send"><button id="send">Senden</button></div>
 </footer>
@@ -82,6 +84,10 @@ small{color:var(--muted)}
     <input id="token" type="password" autocomplete="off" placeholder="dein Geheimwort">
     <div class="row" style="justify-content:flex-start;margin:-4px 0 12px"><button class="ghost" id="testHub" type="button">Verbindung testen</button></div>
     <div id="hubStatus" style="color:var(--muted);font-size:14px;margin-bottom:12px"></div>
+    <label>Live-Stimme (männlich)<br><small>Für das Live-Gespräch. Charon klingt tief und ruhig.</small></label>
+    <select id="livevoice"><option>Charon</option><option>Orus</option><option>Fenrir</option><option>Puck</option><option>Alnilam</option></select>
+    <label>Live-Modell<br><small>Leer lassen = automatisch suchen.</small></label>
+    <input id="livemodel" type="text" autocomplete="off" autocapitalize="off" placeholder="automatisch">
     <label>Groq-Schlüssel (schnell, kostenlos)<br><small>Optional. Mit Schlüssel nimmt Jarvis zuerst Groq und bei Problemen Gemini.</small></label>
     <input id="groq" type="password" autocomplete="off" placeholder="gsk_...">
     <label>Groq-Modell</label>
@@ -109,7 +115,7 @@ const store = {
 function model(){ return store.get('jv_model') || DEFAULT_MODEL; }
 function groqModel(){ return store.get('jv_groqmodel') || 'llama-3.1-8b-instant'; }
 let LASTUSED = '';
-function activeModel(){ return (LASTUSED === 'groq' || (!LASTUSED && store.get('jv_groq'))) ? groqModel() : model(); }
+function activeModel(){ if(typeof live !== 'undefined' && live) return live.model; return (LASTUSED === 'groq' || (!LASTUSED && store.get('jv_groq'))) ? groqModel() : model(); }
 let history = [], recognition = null, busy = false, STATE = '';
 
 function add(text, cls){
@@ -193,6 +199,8 @@ $('name').value = store.get('jv_name');
 $('wissen').value = store.get('jv_wissen');
 $('model').value = store.get('jv_model');
 $('groq').value = store.get('jv_groq');
+$('livemodel').value = store.get('jv_livemodel');
+$('livevoice').value = store.get('jv_livevoice') || 'Charon';
 $('groqModel').value = store.get('jv_groqmodel');
 $('hub').value = store.get('jv_hub');
 $('token').value = store.get('jv_token');
@@ -207,6 +215,8 @@ $('save').onclick = () => {
   store.set('jv_wissen', $('wissen').value);
   store.set('jv_model', $('model').value.trim());
   store.set('jv_groq', $('groq').value.trim());
+  store.set('jv_livemodel', $('livemodel').value.trim());
+  store.set('jv_livevoice', $('livevoice').value);
   store.set('jv_groqmodel', $('groqModel').value.trim());
   store.set('jv_voice', $('voice').value);
   store.set('jv_hub', $('hub').value.trim());
@@ -402,7 +412,7 @@ async function handle(text){
 }
 let active = false, awakeUntil = 0, rec = null, restartT = null, wakeLock = null;
 const WAKE = /(jarvis|jarwis|yarvis|charvis|tscharvis|dscharvis|jarves|jarvie|jarvi[sz])/i;
-function idleStatus(){ setState('', active ? 'Sag „Jarvis“, um mit mir zu sprechen.' : 'Tippe auf „Jarvis aktivieren“.'); }
+function idleStatus(){ setState('', active ? 'Sag „Jarvis“, um mit mir zu sprechen.' : 'Tippe auf „Live-Gespräch starten“.'); }
 function stopListening(){
   clearTimeout(restartT);
   if(rec){ rec.onend = null; rec.onresult = null; rec.onerror = null; try{ rec.abort(); }catch(e){} rec = null; }
@@ -455,7 +465,7 @@ function startRec(){
 async function keepAwake(){ try{ if(navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); }catch(e){} }
 function activate(){
   active = true; unlockSpeech(); keepAwake();
-  $('start').hidden = true; $('pill').hidden = false; $('pill').className = ''; $('pill').textContent = '● Hört zu';
+  $('start').hidden = true; $('wake').hidden = true; $('pill').hidden = false; $('pill').className = ''; $('pill').textContent = '● Hört zu';
   idleStatus(); startRec();
 }
 function pause(){
@@ -463,8 +473,9 @@ function pause(){
   $('pill').className = 'off'; $('pill').textContent = '○ Pausiert (tippen zum Starten)';
   idleStatus();
 }
-$('start').onclick = activate;
-$('pill').onclick = () => { if(active) pause(); else activate(); };
+$('start').onclick = startLive;
+$('wake').onclick = activate;
+$('pill').onclick = () => { if(live) stopLive(); else if(active) pause(); else activate(); };
 document.addEventListener('visibilitychange', () => {
   if(document.hidden){ stopListening(); }
   else if(active){ keepAwake(); resume(); }
@@ -478,6 +489,129 @@ function sendTyped(){
 }
 $('send').onclick = sendTyped;
 $('typed').addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); sendTyped(); } });
+
+/* ---------- Live-Gespräch (direkte Sprache, wie Sprachmodus) ---------- */
+let live = null;
+function b64(buf){ const b = new Uint8Array(buf); let s = ''; for(let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000)); return btoa(s); }
+async function findLiveModel(key){
+  const manual = store.get('jv_livemodel');
+  if(manual) return manual;
+  const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', {headers:{'x-goog-api-key':key}});
+  const d = await r.json();
+  if(!r.ok) throw new Error((d.error && d.error.message) || 'Modellliste nicht ladbar');
+  const names = (d.models || []).filter(m => (m.supportedGenerationMethods || []).includes('bidiGenerateContent')).map(m => m.name.replace('models/', ''));
+  if(!names.length) throw new Error('Dein Schlüssel hat keinen Zugriff auf Live-Gespräche.');
+  return names.find(n => /native-audio/.test(n)) || names.find(n => /live/.test(n)) || names[0];
+}
+function livePlay(data){
+  if(!live) return;
+  const bin = atob(data), n = bin.length >> 1;
+  const buf = live.ctx.createBuffer(1, n, 24000), ch = buf.getChannelData(0);
+  for(let i = 0; i < n; i++){ let v = bin.charCodeAt(2*i) | (bin.charCodeAt(2*i+1) << 8); if(v >= 32768) v -= 65536; ch[i] = v / 32768; }
+  const src = live.ctx.createBufferSource(); src.buffer = buf; src.connect(live.ctx.destination);
+  const now = live.ctx.currentTime;
+  if(live.next < now + 0.03) live.next = now + 0.06;
+  src.start(live.next); live.next += buf.duration;
+  live.sources.add(src);
+  src.onended = () => { if(!live) return; live.sources.delete(src); if(!live.sources.size) setState('listening', 'Live: sprich einfach …'); };
+  setState('speaking', 'Jarvis spricht … (du kannst jederzeit unterbrechen)');
+}
+function liveStopPlayback(){
+  if(!live) return;
+  live.sources.forEach(x => { try{ x.stop(); }catch(e){} });
+  live.sources.clear(); live.next = 0;
+}
+function liveFlushIn(){ if(live && live.inTxt.trim()){ add(live.inTxt.trim(), 'me'); } if(live) live.inTxt = ''; }
+function liveFlushOut(){ if(live && live.outTxt.trim()){ add(live.outTxt.trim(), 'ai'); } if(live) live.outTxt = ''; }
+function liveMessage(m){
+  live.last = Date.now();
+  if(m.setupComplete){
+    live.ready = true;
+    setState('listening', 'Live: sprich einfach …');
+    live.ws.send(JSON.stringify({clientContent:{turns:[{role:'user', parts:[{text:'Begrüße mich ganz kurz.'}]}], turnComplete:true}}));
+    return;
+  }
+  if(m.goAway){ stopLive('Die Sitzung läuft ab. Starte das Live-Gespräch bei Bedarf neu.'); return; }
+  const sc = m.serverContent; if(!sc) return;
+  if(sc.interrupted){ liveStopPlayback(); liveFlushOut(); }
+  if(sc.inputTranscription && sc.inputTranscription.text) live.inTxt += sc.inputTranscription.text;
+  if(sc.outputTranscription && sc.outputTranscription.text){ liveFlushIn(); live.outTxt += sc.outputTranscription.text; }
+  if(sc.modelTurn && sc.modelTurn.parts){
+    sc.modelTurn.parts.forEach(p => { if(p.inlineData && p.inlineData.data){ liveFlushIn(); livePlay(p.inlineData.data); } });
+  }
+  if(sc.turnComplete){ liveFlushIn(); liveFlushOut(); }
+}
+async function startLive(){
+  const key = store.get('jv_key');
+  if(!key){ add('Für das Live-Gespräch brauchst du den Gemini-Schlüssel (Einstellungen).', 'sys'); return; }
+  if(live) return;
+  active = false; stopListening();
+  setState('thinking', 'Verbinde …');
+  let ctx, stream;
+  try{
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    await ctx.resume();
+    stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, autoGainControl:true}});
+    if(store.get('jv_hub') && Date.now() - hubAt > 120000){ await Promise.race([loadHub(false), new Promise(r => setTimeout(r, 6000))]); }
+    const modelName = await findLiveModel(key);
+    const ws = new WebSocket('wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=' + encodeURIComponent(key));
+    live = {ws, ctx, stream, model: modelName, ready:false, next:0, sources:new Set(), inTxt:'', outTxt:'', last:Date.now(), timer:null, src:null, proc:null};
+    $('start').hidden = true; $('wake').hidden = true; $('pill').hidden = false; $('pill').className = ''; $('pill').textContent = '● Live – tippen zum Beenden';
+    ws.onopen = () => {
+      ws.send(JSON.stringify({setup:{
+        model: 'models/' + modelName,
+        generationConfig:{responseModalities:['AUDIO'], speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName: store.get('jv_livevoice') || 'Charon'}}}},
+        systemInstruction:{parts:[{text: systemText() + ' Du bist gerade in einem Live-Sprachgespräch. Sprich Deutsch, natürlich, ruhig und in kurzen Sätzen.'}]},
+        inputAudioTranscription:{}, outputAudioTranscription:{}
+      }}));
+    };
+    ws.onmessage = async ev => {
+      try{
+        const txt = typeof ev.data === 'string' ? ev.data : await ev.data.text();
+        if(live) liveMessage(JSON.parse(txt));
+      }catch(e){}
+    };
+    ws.onerror = () => {};
+    ws.onclose = ev => { if(live && live.ws === ws) stopLive('Live-Gespräch beendet' + (ev.reason ? ': ' + ev.reason : ' (Code ' + ev.code + ')') + '.'); };
+    const src = ctx.createMediaStreamSource(stream);
+    const proc = ctx.createScriptProcessor(4096, 1, 1);
+    proc.onaudioprocess = ev => {
+      if(!live || !live.ready || ws.readyState !== 1) return;
+      const inp = ev.inputBuffer.getChannelData(0), ratio = ctx.sampleRate / 16000;
+      const len = Math.floor(inp.length / ratio), out = new Int16Array(len);
+      for(let i = 0; i < len; i++){
+        const a = Math.floor(i * ratio), b = Math.floor((i + 1) * ratio); let sum = 0, c = 0;
+        for(let j = a; j < b && j < inp.length; j++){ sum += inp[j]; c++; }
+        const v = Math.max(-1, Math.min(1, c ? sum / c : 0));
+        out[i] = v < 0 ? v * 32768 : v * 32767;
+      }
+      ws.send(JSON.stringify({realtimeInput:{audio:{data: b64(out.buffer), mimeType:'audio/pcm;rate=16000'}}}));
+    };
+    src.connect(proc); proc.connect(ctx.destination);
+    live.src = src; live.proc = proc;
+    live.timer = setInterval(() => { if(live && Date.now() - live.last > 90000) stopLive('Nach 90 Sekunden Stille beendet. Tippe auf „Live-Gespräch starten“, um weiterzumachen.'); }, 10000);
+  }catch(e){
+    try{ if(stream) stream.getTracks().forEach(t => t.stop()); if(ctx) ctx.close(); }catch(x){}
+    live = null;
+    $('pill').hidden = true; $('start').hidden = false; $('wake').hidden = false;
+    add('Live-Gespräch nicht möglich: ' + (e.message || e), 'sys');
+    idleStatus();
+  }
+}
+function stopLive(msg){
+  if(!live) return;
+  const L = live; live = null;
+  clearInterval(L.timer);
+  try{ L.ws.onclose = null; L.ws.close(); }catch(e){}
+  try{ L.proc.disconnect(); L.src.disconnect(); }catch(e){}
+  try{ L.sources.forEach(x => { try{ x.stop(); }catch(e){} }); }catch(e){}
+  try{ L.stream.getTracks().forEach(t => t.stop()); }catch(e){}
+  try{ L.ctx.close(); }catch(e){}
+  $('pill').hidden = true; $('start').hidden = false; $('wake').hidden = false;
+  if(msg) add(msg, 'sys');
+  idleStatus();
+}
+document.addEventListener('visibilitychange', () => { if(document.hidden && live) stopLive('Live-Gespräch pausiert, weil die Seite im Hintergrund war.'); });
 
 /* ---------- Hintergrund: HUD-Animation ---------- */
 const cv = $('bg'), g = cv.getContext('2d');
