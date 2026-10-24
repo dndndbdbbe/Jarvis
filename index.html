@@ -7,47 +7,52 @@
 <meta name="apple-mobile-web-app-title" content="Jarvis">
 <title>Jarvis</title>
 <style>
-:root{--bg:#0d1520;--panel:#16212f;--text:#e8eef5;--muted:#8fa1b5;--accent:#4cc9f0;--me:#22344a;--danger:#ff6b6b}
+:root{--bg:#050b14;--panel:rgba(10,22,36,.72);--text:#dff6ff;--muted:#7fa3b8;--accent:#4cc9f0;--line:#1d3a52;--danger:#ff6b6b}
 *{box-sizing:border-box}
-html,body{height:100%;margin:0}
+html,body{height:100%;margin:0;overflow:hidden}
 body{background:var(--bg);color:var(--text);font:17px/1.45 -apple-system,"Helvetica Neue",Arial,sans-serif;display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+#bg{position:fixed;inset:0;z-index:0;touch-action:none}
+header,#stage,#log,footer{position:relative;z-index:1}
 header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px}
-h1{font-size:20px;margin:0;font-weight:600;letter-spacing:.04em}
-header button{background:none;border:1px solid #2c3e54;color:var(--muted);border-radius:10px;padding:8px 12px;font-size:15px}
-#log{flex:1;overflow-y:auto;padding:8px 18px;display:flex;flex-direction:column;gap:10px}
-.msg{max-width:80%;padding:10px 14px;border-radius:16px;white-space:pre-wrap}
-.me{align-self:flex-end;background:var(--me)}
-.ai{align-self:flex-start;background:var(--panel)}
+h1{font-size:20px;margin:0;font-weight:600;letter-spacing:.2em}
+header button{background:rgba(10,22,36,.6);border:1px solid var(--line);color:var(--muted);border-radius:10px;padding:8px 12px;font-size:15px}
+#stage{flex:1;min-height:120px}
+#log{max-height:30vh;overflow-y:auto;padding:8px 18px;display:flex;flex-direction:column;gap:8px}
+.msg{max-width:80%;padding:9px 14px;border-radius:14px;white-space:pre-wrap;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.me{align-self:flex-end;background:rgba(34,70,100,.7);border:1px solid var(--line)}
+.ai{align-self:flex-start;background:var(--panel);border:1px solid var(--line)}
 .sys{align-self:center;color:var(--muted);font-size:15px;text-align:center}
-footer{padding:12px 18px 18px;display:flex;flex-direction:column;align-items:center;gap:12px}
-#status{color:var(--muted);min-height:22px;font-size:15px}
-#mic{width:96px;height:96px;border-radius:50%;border:0;background:var(--accent);color:#06222e;font-size:38px;transition:transform .15s}
-#mic.listening{background:var(--danger);animation:pulse 1.2s infinite}
-#mic.thinking{background:#f4c95d}
-#mic.speaking{background:#7bd88f}
+footer{padding:10px 18px 16px;display:flex;flex-direction:column;align-items:center;gap:10px}
+#status{color:var(--muted);min-height:22px;font-size:15px;text-align:center}
+#mic{width:84px;height:84px;border-radius:50%;border:2px solid rgba(255,255,255,.35);background:var(--accent);color:#06222e;font-size:34px;box-shadow:0 0 28px rgba(76,201,240,.55);transition:transform .15s,background .3s}
+#mic.listening{background:var(--danger);box-shadow:0 0 34px rgba(255,107,107,.7);animation:pulse 1.2s infinite}
+#mic.thinking{background:#f4c95d;box-shadow:0 0 34px rgba(244,201,93,.6)}
+#mic.speaking{background:#7bd88f;box-shadow:0 0 34px rgba(123,216,143,.6)}
 @keyframes pulse{50%{transform:scale(1.08)}}
 @media (prefers-reduced-motion:reduce){#mic.listening{animation:none}}
-label.opt{color:var(--muted);font-size:15px;display:flex;gap:8px;align-items:center}
-#settings{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);align-items:center;justify-content:center;padding:20px}
+label.opt{color:var(--muted);font-size:14px;display:flex;gap:8px;align-items:center}
+.typed{display:flex;gap:8px;width:100%;max-width:560px}
+.typed input{flex:1;padding:11px 14px;border-radius:12px;border:1px solid var(--line);background:var(--panel);color:var(--text);font-size:17px}
+.typed button{padding:0 18px;border-radius:12px;border:0;background:var(--accent);color:#06222e;font-size:16px}
+#settings{display:none;position:fixed;inset:0;z-index:5;background:rgba(0,0,0,.75);align-items:center;justify-content:center;padding:20px}
 #settings.open{display:flex}
-.card{background:var(--panel);border-radius:18px;padding:20px;width:100%;max-width:460px}
+.card{background:#0e1c2c;border:1px solid var(--line);border-radius:18px;padding:20px;width:100%;max-width:460px;max-height:90vh;overflow-y:auto}
 .card h2{margin:0 0 12px;font-size:18px}
-.card input{width:100%;padding:12px;border-radius:10px;border:1px solid #2c3e54;background:var(--bg);color:var(--text);font-size:16px;margin:4px 0 12px}
-.card textarea{width:100%;height:110px;padding:12px;border-radius:10px;border:1px solid #2c3e54;background:var(--bg);color:var(--text);font-size:15px;margin:4px 0 12px}
+.card input,.card select{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-size:16px;margin:4px 0 12px}
+.card textarea{width:100%;height:100px;padding:12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font-size:15px;margin:4px 0 12px}
 .card .row{display:flex;gap:10px;justify-content:flex-end}
 .card button{padding:10px 16px;border-radius:10px;border:0;font-size:16px;background:var(--accent);color:#06222e}
-.card button.ghost{background:none;border:1px solid #2c3e54;color:var(--muted)}
+.card button.ghost{background:none;border:1px solid var(--line);color:var(--muted)}
 small{color:var(--muted)}
-.typed{display:flex;gap:8px;width:100%;max-width:560px}
-.typed input{flex:1;padding:12px 14px;border-radius:12px;border:1px solid #2c3e54;background:var(--panel);color:var(--text);font-size:17px}
-.typed button{padding:0 18px;border-radius:12px;border:0;background:var(--accent);color:#06222e;font-size:16px}
 </style>
 </head>
 <body>
+<canvas id="bg"></canvas>
 <header>
-  <h1>Jarvis</h1>
+  <h1>JARVIS</h1>
   <button id="openSettings">Einstellungen</button>
 </header>
+<div id="stage"></div>
 <div id="log"></div>
 <footer>
   <div id="status">Tippe aufs Mikrofon und sprich.</div>
@@ -63,6 +68,9 @@ small{color:var(--muted)}
     <input id="key" type="password" autocomplete="off" placeholder="AIza...">
     <label>Dein Name</label>
     <input id="name" type="text" placeholder="z. B. Alex">
+    <label>Stimme<br><small>Männliche deutsche Stimme wählen. Bessere Stimmen: iPad-Einstellungen → Bedienungshilfen → Gesprochene Inhalte → Stimmen → Deutsch.</small></label>
+    <select id="voice"></select>
+    <div class="row" style="justify-content:flex-start;margin:-4px 0 12px"><button class="ghost" id="testVoice" type="button">Stimme testen</button></div>
     <label>KI-Modell<br><small>Wenn Jarvis zu lange braucht, ein anderes Modell probieren.</small></label>
     <input id="model" type="text" autocomplete="off" autocapitalize="off" placeholder="gemini-3.8-flash">
     <div class="row" style="justify-content:flex-start;margin:-4px 0 12px"><button class="ghost" id="listModels" type="button">Verfügbare Modelle zeigen</button></div>
@@ -78,36 +86,68 @@ small{color:var(--muted)}
 
 <script>
 const DEFAULT_MODEL = 'gemini-3.8-flash';
-function model(){ return store.get('jv_model') || DEFAULT_MODEL; }
 const $ = id => document.getElementById(id);
 const store = {
   get(k){ try{ return localStorage.getItem(k) || '' }catch(e){ return '' } },
   set(k,v){ try{ localStorage.setItem(k,v) }catch(e){} }
 };
-let history = [];
-let recognition = null;
-let busy = false;
+function model(){ return store.get('jv_model') || DEFAULT_MODEL; }
+let history = [], recognition = null, busy = false, STATE = '';
 
 function add(text, cls){
   const d = document.createElement('div');
   d.className = 'msg ' + cls; d.textContent = text;
   $('log').appendChild(d); $('log').scrollTop = $('log').scrollHeight;
 }
-function setState(cls, text){
-  $('mic').className = cls; $('status').textContent = text;
+function setState(cls, text){ STATE = cls; $('mic').className = cls; $('status').textContent = text; }
+
+/* ---------- Stimme ---------- */
+function deVoices(){
+  const q = v => /premium|enhanced|erweitert|verbessert/i.test(v.name) ? 0 : 1;
+  return (window.speechSynthesis ? speechSynthesis.getVoices() : [])
+    .filter(v => v.lang && v.lang.toLowerCase().startsWith('de')).sort((a,b) => q(a)-q(b));
+}
+function pickVoice(){
+  const vs = deVoices(), want = store.get('jv_voice');
+  let v = vs.find(x => x.name === want);
+  if(!v){ for(const n of ['Martin','Markus','Yannick','Viktor','Stefan','Jonas','Hans']){ v = vs.find(x => x.name.includes(n)); if(v) break; } }
+  return v || vs[0];
+}
+function fillVoices(){
+  const sel = $('voice'), cur = store.get('jv_voice');
+  sel.innerHTML = '<option value="">Automatisch (männlich bevorzugt)</option>';
+  deVoices().forEach(v => { const o = document.createElement('option'); o.value = v.name; o.textContent = v.name; if(v.name === cur) o.selected = true; sel.appendChild(o); });
+}
+if(window.speechSynthesis){ speechSynthesis.onvoiceschanged = fillVoices; }
+function speak(text, voiceName){
+  return new Promise(resolve => {
+    const synth = window.speechSynthesis;
+    if(!synth){ resolve(); return; }
+    synth.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'de-DE'; u.pitch = 0.85; u.rate = 0.98;
+    let v = pickVoice();
+    if(voiceName){ v = deVoices().find(x => x.name === voiceName) || v; }
+    if(v) u.voice = v;
+    u.onend = resolve; u.onerror = resolve;
+    synth.speak(u);
+  });
 }
 
-// Einstellungen
+/* ---------- Einstellungen ---------- */
 $('key').value = store.get('jv_key');
 $('name').value = store.get('jv_name');
 $('wissen').value = store.get('jv_wissen');
 $('model').value = store.get('jv_model');
-$('openSettings').onclick = () => $('settings').classList.add('open');
+fillVoices();
+$('openSettings').onclick = () => { fillVoices(); $('settings').classList.add('open'); };
+$('testVoice').onclick = () => speak('Guten Tag. Alle Systeme laufen einwandfrei.', $('voice').value);
 $('save').onclick = () => {
   store.set('jv_key', $('key').value.trim());
   store.set('jv_name', $('name').value.trim());
   store.set('jv_wissen', $('wissen').value);
   store.set('jv_model', $('model').value.trim());
+  store.set('jv_voice', $('voice').value);
   $('settings').classList.remove('open');
 };
 $('listModels').onclick = async () => {
@@ -127,16 +167,17 @@ $('listModels').onclick = async () => {
 $('reset').onclick = () => { history = []; $('log').innerHTML = ''; $('settings').classList.remove('open'); };
 if(!store.get('jv_key')){ add('Willkommen! Öffne zuerst die Einstellungen und trage deinen Gemini-Schlüssel ein.', 'sys'); }
 
+/* ---------- Gemini ---------- */
 function systemText(){
   const name = store.get('jv_name') || 'dem Nutzer';
   const wissen = store.get('jv_wissen');
   return 'Du bist Jarvis, ein persönlicher KI-Assistent und sprichst mit ' + name + '. ' +
-    'Antworte auf Deutsch, locker, freundlich und kurz (meist 1 bis 3 Sätze), weil deine Antwort vorgelesen wird. ' +
+    'Dein Ton: höflich, ruhig, souverän, mit trockenem Humor, wie ein britischer Butler. ' +
+    'Antworte auf Deutsch und kurz (meist 1 bis 3 Sätze), weil deine Antwort vorgelesen wird. ' +
     'Keine Listen, kein Markdown, keine Sternchen, keine Emojis. ' +
     'Heute ist ' + new Date().toLocaleString('de-DE', {dateStyle:'full', timeStyle:'short'}) + '. ' +
     (wissen ? 'Aktuelles Wissen über den Nutzer:\n' + wissen : 'Du hast noch keinen Zugriff auf Mails oder Stundenplan. Sag das ehrlich, wenn danach gefragt wird.');
 }
-
 async function askGemini(text){
   const key = store.get('jv_key');
   if(!key) throw new Error('Kein API-Schlüssel eingetragen.');
@@ -145,16 +186,12 @@ async function askGemini(text){
   const timer = setTimeout(() => ctl.abort(), 40000);
   let res;
   try{
-  res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model() + ':generateContent', {
-    method:'POST',
-    signal: ctl.signal,
-    headers:{'Content-Type':'application/json','x-goog-api-key':key},
-    body: JSON.stringify({
-      systemInstruction:{parts:[{text:systemText()}]},
-      contents: history.slice(-20)
-    })
-  });
-  }catch(e){ history.pop(); throw new Error(e.name === 'AbortError' ? 'Keine Antwort nach 40 Sekunden. Versuch es nochmal oder nimm ein schnelleres Modell.' : e.message); }
+    res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model() + ':generateContent', {
+      method:'POST', signal: ctl.signal,
+      headers:{'Content-Type':'application/json','x-goog-api-key':key},
+      body: JSON.stringify({ systemInstruction:{parts:[{text:systemText()}]}, contents: history.slice(-20) })
+    });
+  }catch(e){ history.pop(); throw new Error(e.name === 'AbortError' ? 'Keine Antwort nach 40 Sekunden. Versuch es nochmal oder wähle in den Einstellungen ein schnelleres Modell.' : e.message); }
   finally{ clearTimeout(timer); }
   const data = await res.json();
   if(!res.ok){ history.pop(); throw new Error((data.error && data.error.message) || 'Fehler ' + res.status); }
@@ -162,21 +199,6 @@ async function askGemini(text){
   history.push({role:'model', parts:[{text:out}]});
   return out;
 }
-
-function speak(text){
-  return new Promise(resolve => {
-    const synth = window.speechSynthesis;
-    if(!synth){ resolve(); return; }
-    synth.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'de-DE';
-    const v = synth.getVoices().find(v => v.lang && v.lang.startsWith('de'));
-    if(v) u.voice = v;
-    u.onend = resolve; u.onerror = resolve;
-    synth.speak(u);
-  });
-}
-
 async function handle(text){
   busy = true;
   add(text, 'me');
@@ -184,16 +206,13 @@ async function handle(text){
   try{
     const answer = await askGemini(text);
     add(answer, 'ai');
-    setState('speaking', 'Jarvis spricht … (tippe zum Unterbrechen)');
+    setState('speaking', 'Jarvis spricht … (tippe aufs Mikrofon zum Unterbrechen)');
     await speak(answer);
-  }catch(e){
-    add('Fehler: ' + e.message, 'sys');
-  }
+  }catch(e){ add('Fehler: ' + e.message, 'sys'); }
   busy = false;
   setState('', 'Tippe aufs Mikrofon und sprich.');
   if($('auto').checked && !document.hidden) listen();
 }
-
 function listen(){
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if(!SR){ add('Dieser Browser kann keine Spracherkennung. Bitte Safari nutzen.', 'sys'); return; }
@@ -221,7 +240,6 @@ function listen(){
   recognition.onend = () => { if(!got && !busy){ setState('', 'Nichts verstanden. Tippe nochmal aufs Mikrofon oder tippe unten.'); } };
   recognition.start();
 }
-
 $('mic').onclick = () => {
   if(window.speechSynthesis){ window.speechSynthesis.cancel(); }
   if(recognition){ try{ recognition.abort(); }catch(e){} }
@@ -238,7 +256,103 @@ function sendTyped(){
 }
 $('send').onclick = sendTyped;
 $('typed').addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); sendTyped(); } });
-if(window.speechSynthesis){ window.speechSynthesis.getVoices(); }
+
+/* ---------- Hintergrund: HUD-Animation ---------- */
+const cv = $('bg'), g = cv.getContext('2d');
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let W, H, t = 0, px = 0, py = 0, tx = 0, ty = 0, energy = .25, hue = [76,201,240];
+const COL = {'':[76,201,240], listening:[255,107,107], thinking:[244,201,93], speaking:[123,216,143]};
+const NRG = {'':.25, listening:.65, thinking:.5, speaking:1};
+const ripples = [];
+const pts = Array.from({length:60}, () => ({x:Math.random(), y:Math.random(), vx:(Math.random()-.5)*.00025, vy:(Math.random()-.5)*.00025}));
+function resize(){
+  const d = Math.min(devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W*d; cv.height = H*d; cv.style.width = W+'px'; cv.style.height = H+'px';
+  g.setTransform(d,0,0,d,0,0);
+}
+addEventListener('resize', resize); resize();
+function move(e){ const p = e.touches ? e.touches[0] : e; tx = (p.clientX/W - .5); ty = (p.clientY/H - .5); }
+addEventListener('pointermove', move);
+addEventListener('pointerdown', e => { move(e); ripples.push({x:e.clientX, y:e.clientY, r:0}); });
+const rgba = (c,a) => 'rgba(' + (c[0]|0) + ',' + (c[1]|0) + ',' + (c[2]|0) + ',' + a + ')';
+function frame(){
+  t += reduce ? .002 : .016;
+  const tc = COL[STATE] || COL[''];
+  for(let i=0;i<3;i++) hue[i] += (tc[i]-hue[i])*.06;
+  energy += ((NRG[STATE] ?? .25) - energy)*.05;
+  px += (tx-px)*.06; py += (ty-py)*.06;
+  const c = hue, sp = reduce ? .1 : 1;
+  g.clearRect(0,0,W,H);
+  const cx = W/2 + px*30, cy = H*.36 + py*30, R = Math.min(W*.42, H*.3);
+  const bgG = g.createRadialGradient(cx,cy,0,cx,cy,Math.max(W,H)*.7);
+  bgG.addColorStop(0, rgba(c,.12+energy*.08)); bgG.addColorStop(1, 'rgba(5,11,20,0)');
+  g.fillStyle = bgG; g.fillRect(0,0,W,H);
+  // Raster
+  g.fillStyle = rgba(c,.12);
+  for(let x=(px*-20)%48; x<W; x+=48) for(let y=(py*-20)%48; y<H; y+=48) g.fillRect(x,y,1.5,1.5);
+  // Partikel
+  g.lineWidth = 1;
+  pts.forEach(p => {
+    p.x += p.vx*sp*16; p.y += p.vy*sp*16;
+    if(p.x<0||p.x>1) p.vx *= -1; if(p.y<0||p.y>1) p.vy *= -1;
+    const X = p.x*W + px*40, Y = p.y*H + py*40;
+    g.fillStyle = rgba(c,.5); g.beginPath(); g.arc(X,Y,1.6,0,6.283); g.fill();
+    pts.forEach(q => { const dx = X-(q.x*W+px*40), dy = Y-(q.y*H+py*40), d = dx*dx+dy*dy;
+      if(d<9000 && q!==p){ g.strokeStyle = rgba(c,.12*(1-d/9000)); g.beginPath(); g.moveTo(X,Y); g.lineTo(q.x*W+px*40,q.y*H+py*40); g.stroke(); } });
+  });
+  // Ringe
+  const spin = (STATE === 'thinking' ? 3 : 1) * sp;
+  const rings = [[.55,6,.35,1,2],[.7,10,.5,-1,1.5],[.85,3,.25,1,2.5],[1,40,.9,-1,1]];
+  rings.forEach(([k,n,fill,dir,w],i) => {
+    g.strokeStyle = rgba(c,.35+energy*.35); g.lineWidth = w;
+    const seg = 6.283/n;
+    for(let j=0;j<n;j++){
+      const a0 = j*seg + t*dir*spin*(.35+i*.18);
+      g.beginPath(); g.arc(cx,cy,R*k,a0,a0+seg*fill); g.stroke();
+    }
+  });
+  // Skala
+  g.strokeStyle = rgba(c,.5); g.lineWidth = 1;
+  for(let i=0;i<72;i++){
+    const a = i/72*6.283 - t*.08*sp, l = i%6 ? 5 : 12;
+    g.beginPath(); g.moveTo(cx+Math.cos(a)*R*1.12, cy+Math.sin(a)*R*1.12); g.lineTo(cx+Math.cos(a)*(R*1.12+l), cy+Math.sin(a)*(R*1.12+l)); g.stroke();
+  }
+  // Wellenring
+  g.strokeStyle = rgba(c,.8); g.lineWidth = 2;
+  for(let i=0;i<96;i++){
+    const a = i/96*6.283, w = (Math.sin(a*5+t*4*sp)+Math.sin(a*9-t*3*sp))*.5;
+    const l = 4 + energy*18*(.4+Math.abs(w));
+    g.beginPath(); g.moveTo(cx+Math.cos(a)*R*.42, cy+Math.sin(a)*R*.42); g.lineTo(cx+Math.cos(a)*(R*.42+l), cy+Math.sin(a)*(R*.42+l)); g.stroke();
+  }
+  // Kern
+  const cr = R*.26*(1+.07*Math.sin(t*(2+energy*4))*energy*1.5);
+  const core = g.createRadialGradient(cx,cy,0,cx,cy,cr*2.4);
+  core.addColorStop(0,'rgba(255,255,255,.95)'); core.addColorStop(.25, rgba(c,.9)); core.addColorStop(1, rgba(c,0));
+  g.fillStyle = core; g.beginPath(); g.arc(cx,cy,cr*2.4,0,6.283); g.fill();
+  g.strokeStyle = rgba(c,.95); g.lineWidth = 2;
+  g.beginPath();
+  for(let i=0;i<3;i++){ const a = i*2.094 + t*.5*sp - 1.57; g.lineTo(cx+Math.cos(a)*cr*1.1, cy+Math.sin(a)*cr*1.1); }
+  g.closePath(); g.stroke();
+  g.beginPath(); g.arc(cx,cy,cr*1.25,0,6.283); g.stroke();
+  // Tipp-Wellen
+  for(let i=ripples.length-1;i>=0;i--){
+    const r = ripples[i]; r.r += 5; 
+    if(r.r > 260){ ripples.splice(i,1); continue; }
+    g.strokeStyle = rgba(c,.6*(1-r.r/260)); g.lineWidth = 2; g.beginPath(); g.arc(r.x,r.y,r.r,0,6.283); g.stroke();
+  }
+  // Anzeigen
+  g.fillStyle = rgba(c,.75); g.font = '12px ui-monospace, Menlo, monospace';
+  const now = new Date();
+  g.textAlign = 'left'; g.fillText(now.toLocaleTimeString('de-DE'), 18, H - Math.min(H*.45, 380));
+  g.fillText('SYSTEM ONLINE', 18, H - Math.min(H*.45, 380) + 16);
+  g.textAlign = 'right';
+  const lbl = {'':'BEREIT', listening:'HÖRT ZU', thinking:'ANALYSE', speaking:'ANTWORTET'}[STATE] || 'BEREIT';
+  g.fillText(lbl, W-18, H - Math.min(H*.45, 380));
+  g.fillText(model().toUpperCase(), W-18, H - Math.min(H*.45, 380) + 16);
+  requestAnimationFrame(frame);
+}
+frame();
 </script>
 </body>
 </html>
