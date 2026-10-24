@@ -123,15 +123,14 @@ function fillVoices(){
   deVoices().forEach(v => { const o = document.createElement('option'); o.value = v.name; o.textContent = v.name; if(v.name === cur) o.selected = true; sel.appendChild(o); });
 }
 if(window.speechSynthesis){ speechSynthesis.onvoiceschanged = fillVoices; }
-let speechUnlocked = false;
 function unlockSpeech(){
-  if(speechUnlocked || !window.speechSynthesis) return;
+  const syn = window.speechSynthesis;
+  if(!syn || syn.speaking || syn.pending) return;
   try{
-    const u = new SpeechSynthesisUtterance(' ');
+    const u = new SpeechSynthesisUtterance('Ok');
     u.volume = 0; u.lang = 'de-DE';
-    speechSynthesis.speak(u);
-    speechSynthesis.getVoices();
-    speechUnlocked = true;
+    syn.speak(u);
+    syn.getVoices();
   }catch(e){}
 }
 addEventListener('pointerdown', unlockSpeech);
@@ -143,7 +142,7 @@ function speakChunk(text, voice){
     if(voice) u.voice = voice;
     let started = false, done = false;
     const fin = ok => { if(!done){ done = true; clearTimeout(wd); resolve(ok); } };
-    const wd = setTimeout(() => { if(!started) fin(false); }, 3000);
+    const wd = setTimeout(() => { if(!started) fin(false); }, 5000);
     u.onstart = () => { started = true; };
     u.onend = () => fin(true);
     u.onerror = () => fin(started);
@@ -154,14 +153,15 @@ async function speak(text, voiceName){
   const synth = window.speechSynthesis;
   if(!synth){ add('Dieser Browser kann nicht sprechen.', 'sys'); return; }
   synth.cancel();
-  await new Promise(r => setTimeout(r, 250));
+  await new Promise(r => setTimeout(r, 700));
   try{ synth.resume(); }catch(e){}
   let v = pickVoice();
   if(voiceName){ v = deVoices().find(x => x.name === voiceName) || v; }
   const parts = (text.match(/[^.!?]+[.!?]*\s*/g) || [text]).map(x => x.trim()).filter(Boolean);
   let first = true;
   for(const part of parts){
-    const ok = await speakChunk(part, v);
+    let ok = await speakChunk(part, v);
+    if(!ok && first){ synth.cancel(); await new Promise(r => setTimeout(r, 800)); ok = await speakChunk(part, v); }
     if(!ok && first){
       if(v){ const ok2 = await speakChunk(part, null); if(ok2){ first = false; continue; } }
       add('Kein Ton. Prüfe: Lautstärke hoch, iPad nicht stumm (Kontrollzentrum), Bluetooth aus. Tippe auf eine Antwort, um sie noch einmal vorzulesen.', 'sys');
@@ -421,12 +421,12 @@ function frame(){
   // Anzeigen
   g.fillStyle = rgba(c,.75); g.font = '12px ui-monospace, Menlo, monospace';
   const now = new Date();
-  g.textAlign = 'left'; g.fillText(now.toLocaleTimeString('de-DE'), 18, H - Math.min(H*.45, 380));
-  g.fillText('SYSTEM ONLINE', 18, H - Math.min(H*.45, 380) + 16);
+  g.textAlign = 'left'; g.fillText(now.toLocaleTimeString('de-DE'), 18, 84);
+  g.fillText('SYSTEM ONLINE', 18, 100);
   g.textAlign = 'right';
   const lbl = {'':'BEREIT', listening:'HÖRT ZU', thinking:'ANALYSE', speaking:'ANTWORTET'}[STATE] || 'BEREIT';
-  g.fillText(lbl, W-18, H - Math.min(H*.45, 380));
-  g.fillText(model().toUpperCase(), W-18, H - Math.min(H*.45, 380) + 16);
+  g.fillText(lbl, W-18, 84);
+  g.fillText(model().toUpperCase(), W-18, 100);
   requestAnimationFrame(frame);
 }
 frame();
