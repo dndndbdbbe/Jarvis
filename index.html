@@ -784,6 +784,27 @@ function liveStopPlayback(){
 }
 function liveFlushIn(){ if(live && live.inTxt.trim()){ add(live.inTxt.trim(), 'me'); } if(live) live.inTxt = ''; }
 function liveFlushOut(){ if(live && live.outTxt.trim()){ add(live.outTxt.trim(), 'ai'); } if(live) live.outTxt = ''; }
+async function liveTool(tc){
+  const out = [];
+  for(const fc of (tc.functionCalls || [])){
+    let res; const a = fc.args || {};
+    try{
+      if(fc.name === 'nachrichten'){
+        const n = Math.max(1, Math.min(5, parseInt(a.anzahl) || 3)), nw = await getNews(n + ' wichtigste');
+        if(nw.items.length) addNews(nw.items);
+        res = {meldungen:nw.text, anweisung:'Fasse genau die ersten ' + n + ' Meldungen in je ein bis zwei kurzen Sätzen zusammen. Die Bilder zeigt die App.'};
+      }else if(fc.name === 'standort_und_wetter'){
+        res = {standort: await whereAmI(), wetter: await weatherAnswer()};
+      }else if(fc.name === 'timer_stellen'){
+        const sec = Math.max(1, Math.round(+a.sekunden || 0)); timers.push({end: Date.now() + sec*1000}); res = {ok:true, dauer:dur(sec)};
+      }else if(fc.name === 'notiz_speichern'){
+        const n = getNotes(); n.push('[' + new Date().toLocaleDateString('de-DE') + '] ' + String(a.text || '')); setNotes(n); res = {ok:true};
+      }else res = {fehler:'unbekanntes Werkzeug'};
+    }catch(e){ res = {fehler:String(e.message || e)}; }
+    out.push({id:fc.id, name:fc.name, response:{ergebnis:res}});
+  }
+  if(live && live.ws.readyState === 1) live.ws.send(JSON.stringify({toolResponse:{functionResponses:out}}));
+}
 function liveMessage(m){
   live.last = Date.now();
   if(m.setupComplete){
@@ -793,6 +814,7 @@ function liveMessage(m){
     return;
   }
   if(m.goAway){ stopLive('Die Sitzung läuft ab. Starte das Live-Gespräch bei Bedarf neu.'); return; }
+  if(m.toolCall){ liveTool(m.toolCall); return; }
   const sc = m.serverContent; if(!sc) return;
   if(sc.interrupted){ liveStopPlayback(); liveFlushOut(); }
   if(sc.inputTranscription && sc.inputTranscription.text) live.inTxt += sc.inputTranscription.text;
@@ -822,7 +844,13 @@ async function startLive(){
       ws.send(JSON.stringify({setup:{
         model: 'models/' + modelName,
         generationConfig:{responseModalities:['AUDIO'], speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName: store.get('jv_livevoice') || 'Charon'}}}},
-        systemInstruction:{parts:[{text: systemText() + ' Du bist gerade in einem Live-Sprachgespräch. Sprich Deutsch, natürlich, ruhig und in kurzen Sätzen.'}]},
+        systemInstruction:{parts:[{text: systemText() + ' Du bist gerade in einem Live-Sprachgespräch. Sprich Deutsch, natürlich, ruhig und in kurzen Sätzen. Für Nachrichten, Standort, Wetter, Timer und Notizen benutzt du immer die passenden Werkzeuge und erfindest niemals Daten.'}]},
+        tools:[{functionDeclarations:[
+          {name:'nachrichten', description:'Holt die wichtigsten aktuellen Weltnachrichten der letzten 24 Stunden und zeigt Bilder dazu. Immer benutzen, wenn der Nutzer nach Nachrichten, Neuigkeiten oder Ereignissen fragt.', parameters:{type:'OBJECT', properties:{anzahl:{type:'INTEGER', description:'Anzahl der Ereignisse, 1 bis 5, Standard 3'}}}},
+          {name:'standort_und_wetter', description:'Liefert den aktuellen Standort des Nutzers und das Wetter dort.'},
+          {name:'timer_stellen', description:'Stellt einen Timer.', parameters:{type:'OBJECT', properties:{sekunden:{type:'INTEGER'}}, required:['sekunden']}},
+          {name:'notiz_speichern', description:'Merkt sich dauerhaft etwas, das der Nutzer gesagt hat.', parameters:{type:'OBJECT', properties:{text:{type:'STRING'}}, required:['text']}}
+        ]}],
         inputAudioTranscription:{}, outputAudioTranscription:{}
       }}));
     };
@@ -945,6 +973,7 @@ function panel(x, y, w, h, title, c){
   g.fillStyle = rgba(c,.07); g.fillRect(x,y,w,h);
   g.fillStyle = rgba(c,.65); g.font = '11px ui-monospace, Menlo, monospace'; g.fillText(title, x+10, y+16);
 }
+function fitTxt(s, w){ if(g.measureText(s).width <= w) return s; while(s.length > 3 && g.measureText(s + '…').width > w) s = s.slice(0, -1); return s + '…'; }
 function rr(x, y, w, h, r){ g.beginPath(); g.moveTo(x+r, y); g.arcTo(x+w, y, x+w, y+h, r); g.arcTo(x+w, y+h, x, y+h, r); g.arcTo(x, y+h, x, y, r); g.arcTo(x, y, x+w, y, r); g.closePath(); }
 function wrapLines(txt, maxW, maxL){
   const out = []; let line = '';
@@ -1089,7 +1118,7 @@ function frame(){
     panel(rx, 76, 230, 40 + R2.length*16, '// STATUS', c);
     g.fillStyle = rgba(c,.95); g.font = '600 16px ui-monospace, Menlo, monospace'; g.fillText(R2[0], rx + 10, 104);
     g.font = '12px ui-monospace, Menlo, monospace'; g.fillStyle = rgba(c,.8);
-    R2.slice(1).forEach((s, i) => g.fillText(s, rx + 10, 124 + i*16));
+    R2.slice(1).forEach((s, i) => g.fillText(fitTxt(s, 210), rx + 10, 124 + i*16));
   } else {
     g.fillStyle = rgba(c,.75);
     g.fillText(now.toLocaleTimeString('de-DE'), 18, 84); g.fillText(L[1] || 'SYSTEM ONLINE', 18, 100);
