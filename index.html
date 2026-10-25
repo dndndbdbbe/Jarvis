@@ -73,6 +73,10 @@ small{color:var(--muted)}
     <input id="key" type="password" autocomplete="off" placeholder="AIza...">
     <label>Dein Name</label>
     <input id="name" type="text" placeholder="z. B. Alex">
+    <label>Geburtsdatum<br><small>Damit Jarvis dein Alter immer richtig kennt.</small></label>
+    <input id="bday" type="date">
+    <label>Über dich<br><small>Schule oder Beruf, Hobbys, Familie: alles, was Jarvis über dich wissen soll.</small></label>
+    <textarea id="about" placeholder="z. B. Ich gehe in die 9. Klasse, spiele Fußball und mag Physik."></textarea>
     <label>Farbschema<br><small>Oder sag: „Jarvis, Farbschema Gold“.</small></label>
     <select id="theme"><option value="cyan">Blau (Standard)</option><option value="gold">Gold</option><option value="green">Grün</option><option value="violet">Violett</option></select>
     <label class="opt" style="margin-bottom:12px"><input type="checkbox" id="wxon" style="width:auto;margin:0"> Standort und Wetter nutzen (Browser fragt nach Erlaubnis)</label>
@@ -95,6 +99,13 @@ small{color:var(--muted)}
     <input id="groq" type="password" autocomplete="off" placeholder="gsk_...">
     <label>Groq-Modell</label>
     <input id="groqModel" type="text" autocomplete="off" autocapitalize="off" placeholder="llama-3.1-8b-instant">
+    <label>Eigener Server (OpenAI-kompatibel)<br><small>Z. B. Ollama oder LM Studio, später auf dem Raspberry Pi. Wird zuerst benutzt. Adresse mit /v1 am Ende, nur https.</small></label>
+    <input id="own" type="url" autocomplete="off" autocapitalize="off" placeholder="https://mein-server.example/v1">
+    <input id="ownModel" type="text" autocomplete="off" autocapitalize="off" placeholder="Modellname, z. B. qwen2.5:0.5b">
+    <input id="ownKey" type="password" autocomplete="off" placeholder="Schlüssel (nur falls nötig)">
+    <label>Gelerntes Wissen<br><small id="kbInfo"></small></label>
+    <div class="row" style="justify-content:flex-start;margin:-4px 0 12px"><button class="ghost" id="kbExport" type="button">Exportieren</button><button class="ghost" id="kbImport" type="button">Importieren</button></div>
+    <input id="kbFile" type="file" accept="application/json" hidden>
     <label>KI-Modell (Gemini)<br><small>Wenn Jarvis zu lange braucht, ein anderes Modell probieren.</small></label>
     <input id="model" type="text" autocomplete="off" autocapitalize="off" placeholder="gemini-3.8-flash">
     <div class="row" style="justify-content:flex-start;margin:-4px 0 12px"><button class="ghost" id="listModels" type="button">Verfügbare Modelle zeigen</button></div>
@@ -118,7 +129,7 @@ const store = {
 function model(){ return store.get('jv_model') || DEFAULT_MODEL; }
 function groqModel(){ return store.get('jv_groqmodel') || 'llama-3.1-8b-instant'; }
 let LASTUSED = '';
-function activeModel(){ if(typeof live !== 'undefined' && live) return live.model; return (LASTUSED === 'groq' || (!LASTUSED && store.get('jv_groq'))) ? groqModel() : model(); }
+function activeModel(){ if(typeof live !== 'undefined' && live) return live.model; if(LASTUSED === 'own') return store.get('jv_ownmodel') || 'EIGENER SERVER'; return (LASTUSED === 'groq' || (!LASTUSED && store.get('jv_groq') && !store.get('jv_own'))) ? groqModel() : model(); }
 let history = [], recognition = null, busy = false, STATE = '';
 
 function add(text, cls){
@@ -210,8 +221,10 @@ $('token').value = store.get('jv_token');
 $('pitch').value = store.get('jv_pitch') || '0.7';
 $('theme').value = store.get('jv_theme') || 'cyan';
 $('wxon').checked = store.get('jv_wx') === '1';
+$('bday').value = store.get('jv_bday'); $('about').value = store.get('jv_about');
+$('own').value = store.get('jv_own'); $('ownModel').value = store.get('jv_ownmodel'); $('ownKey').value = store.get('jv_ownkey');
 fillVoices();
-$('openSettings').onclick = () => { fillVoices(); $('settings').classList.add('open'); };
+$('openSettings').onclick = () => { fillVoices(); kbInfo(); $('settings').classList.add('open'); };
 $('pitch').oninput = () => store.set('jv_pitch', $('pitch').value);
 $('testVoice').onclick = () => speak('Guten Tag. Alle Systeme laufen einwandfrei.', $('voice').value);
 $('save').onclick = () => {
@@ -229,6 +242,8 @@ $('save').onclick = () => {
   store.set('jv_pitch', $('pitch').value);
   store.set('jv_theme', $('theme').value);
   store.set('jv_wx', $('wxon').checked ? '1' : '0');
+  store.set('jv_bday', $('bday').value); store.set('jv_about', $('about').value);
+  store.set('jv_own', $('own').value.trim()); store.set('jv_ownmodel', $('ownModel').value.trim()); store.set('jv_ownkey', $('ownKey').value.trim());
   applyTheme($('theme').value);
   loadHub(false); loadWx();
   $('settings').classList.remove('open');
@@ -347,7 +362,33 @@ loadWx(); setInterval(loadWx, 1800000);
 
 /* ---------- Notizen, Timer, lokale Befehle (ohne KI, sofort) ---------- */
 const getNotes = () => { try{ return JSON.parse(store.get('jv_notes') || '[]'); }catch(e){ return []; } };
-const setNotes = a => store.set('jv_notes', JSON.stringify(a.slice(-40)));
+const setNotes = a => store.set('jv_notes', JSON.stringify(a.slice(-500)));
+function kbInfo(){ $('kbInfo').textContent = getNotes().length + ' Einträge gespeichert. Sag „Merk dir …“ oder „Ab jetzt …“, um Jarvis etwas beizubringen.'; }
+const STOP = new Set('der die das und oder ist sind ein eine einen mit von für auf in im zu zum zur den dem des ich du er sie es wir was wie wo wer wann hat haben nicht auch noch mal bitte'.split(' '));
+const words = x => (x.toLowerCase().match(/[a-zäöüß0-9]{3,}/g) || []).filter(w => !STOP.has(w));
+let lastQ = '';
+function relevantNotes(q){
+  const n = getNotes(), rules = n.filter(x => /^\[Regel\]/.test(x)), rest = n.filter(x => !/^\[Regel\]/.test(x));
+  if(!q) return rules.concat(rest.slice(-15));
+  const qw = new Set(words(q));
+  const top = rest.map((x, i) => { let sc = 0; words(x).forEach(w => { if(qw.has(w)) sc += 2; else for(const v of qw){ if(v.length > 4 && w.length > 4 && w.slice(0,5) === v.slice(0,5)){ sc += 1; break; } } }); return [sc, i, x]; })
+    .filter(a => a[0] > 0).sort((a, b) => b[0] - a[0] || b[1] - a[1]).slice(0, 8).map(a => a[2]);
+  return rules.concat([...new Set(top.concat(rest.slice(-3)))]);
+}
+$('kbExport').onclick = () => {
+  const b = new Blob([JSON.stringify({notes:getNotes(), wissen:store.get('jv_wissen')}, null, 1)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'jarvis-wissen.json'; a.click();
+};
+$('kbImport').onclick = () => $('kbFile').click();
+$('kbFile').onchange = async e => {
+  try{
+    const d = JSON.parse(await e.target.files[0].text());
+    setNotes([...new Set(getNotes().concat(d.notes || []))]);
+    if(d.wissen && !store.get('jv_wissen')){ store.set('jv_wissen', d.wissen); $('wissen').value = d.wissen; }
+    kbInfo();
+  }catch(x){ $('kbInfo').textContent = 'Import fehlgeschlagen.'; }
+  e.target.value = '';
+};
 const timers = [];
 const NUM = {ein:1,eine:1,einen:1,zwei:2,drei:3,vier:4,'fünf':5,sechs:6,sieben:7,acht:8,neun:9,zehn:10,'fünfzehn':15,zwanzig:20,'dreißig':30,vierzig:40,'fünfundvierzig':45,sechzig:60};
 const num = s => { s = s.toLowerCase().replace(',', '.'); return NUM[s] !== undefined ? NUM[s] : parseFloat(s); };
@@ -372,6 +413,9 @@ async function localCommand(raw){
   if(/\bwo\b.*\b(bin|sind|befinde|befinden|befind|stehe|stehen)\b|standort|(welche|welcher|welchem)\s+(stadt|ort|gegend)|wo genau/.test(t)) parts.push(await whereAmI());
   if(/wetter|\bgrad\b|temperatur|regnet|schneit|\bregen\b|wie (kalt|warm)|brauche ich.*(jacke|schirm)/.test(t)) parts.push(await weatherAnswer());
   if(parts.length) return parts.join(' ');
+  if(/wie alt bin ich|mein alter/.test(t)){ const a = ageNow(); return a === null ? 'Dein Geburtsdatum kenne ich noch nicht. Trag es in den Einstellungen ein.' : 'Du bist ' + a + ' Jahre alt.'; }
+  if(/wie hei(ß|ss)e ich|wie ist mein name/.test(t)) return store.get('jv_name') ? 'Du heißt ' + store.get('jv_name') + '.' : 'Deinen Namen kenne ich noch nicht. Sag zum Beispiel: Ich heiße Alex.';
+  if((m = raw.match(/(?:ich hei(?:ß|ss)e|mein name ist|nenn(?:e)? mich)\s+([^.,!?]+)/i))){ const nm = m[1].trim(); store.set('jv_name', nm); $('name').value = nm; return 'Freut mich, ' + nm + '.'; }
   if(/(timer|wecker).*(abbrechen|löschen|stopp|aus)|(abbrechen|lösche|stoppe?).*(timer|wecker)/.test(t)){ const n = timers.length; timers.length = 0; return n ? 'Timer gelöscht.' : 'Es läuft kein Timer.'; }
   if(/timer|wecker|erinnere mich in/.test(t)){
     let s = /halbe stunde/.test(t) ? 1800 : 0;
@@ -394,7 +438,8 @@ async function localCommand(raw){
   if(/münze|kopf oder zahl/.test(t)) return Math.random() < .5 ? 'Kopf.' : 'Zahl.';
   if(/(vergiss|lösche|leere).*(notizen|alles)/.test(t)){ setNotes([]); return 'Alle Notizen gelöscht.'; }
   if(/was hast du dir gemerkt|meine notizen|lies.*notizen/.test(t)){ const n = getNotes(); return n.length ? 'Du hast ' + n.length + ' Notizen. Zuletzt: ' + n.slice(-3).map(x => x.replace(/^\[[^\]]*\]\s*/, '')).join('. ') + '.' : 'Ich habe keine Notizen von dir.'; }
-  if((m = raw.match(/(?:merk(?:e)? dir|notiere(?: dir)?|speichere)[\s,:]*(?:dass\s+)?(.+)/i))){
+  if((m = raw.match(/\bab jetzt\s+(.+)/i))){ const n = getNotes(); n.push('[Regel] ' + m[1].trim()); setNotes(n); return 'Verstanden. Die Regel gilt ab sofort.'; }
+  if((m = raw.match(/(?:merk(?:e)? dir|notiere(?: dir)?|speichere|lerne)[\s,:]*(?:dass\s+)?(.+)/i))){
     const n = getNotes(); n.push('[' + new Date().toLocaleDateString('de-DE') + '] ' + m[1].trim()); setNotes(n); return 'Notiert.';
   }
   if((m = t.match(/(?:farbe|farbschema|design|theme)\s*(?:auf|zu)?\s*(blau|cyan|gold|gelb|orange|grün|gruen|lila|violett)/))){
@@ -406,19 +451,56 @@ async function localCommand(raw){
 const BRIEF = /guten morgen|briefing|lagebericht|tages(?:ü|ue)berblick/i;
 const BRIEF_Q = 'Gib mir ein kurzes Morgenbriefing in höchstens fünf Sätzen: Uhrzeit, Wetter (falls bekannt), Stundenplan für heute, ungelesene Mails und meine Notizen, falls relevant.';
 
+/* ---------- Nachrichten der letzten 24 Stunden ---------- */
+const NEWS = /nachrichten|neuigkeiten|weltgeschehen|was gibt.?s neues|\bnews\b|letzten 24 stunden|(passiert|los ist).*(welt|heute|gestern|stunden)|(welt|heute|gestern).*passiert/i;
+let newsCtx = '';
+async function getNews(){
+  try{
+    const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 10000);
+    const r = await fetch('https://www.tagesschau.de/api2u/homepage/', {signal:ctl.signal}); clearTimeout(tm);
+    const d = await r.json(), since = Date.now() - 864e5;
+    let items = (d.news || []).filter(x => x.title);
+    const recent = items.filter(x => !x.date || new Date(x.date).getTime() >= since);
+    items = (recent.length ? recent : items).slice(0, 14);
+    if(items.length) return items.map(x => '- ' + (x.topline ? x.topline + ': ' : '') + x.title + (x.firstSentence ? '. ' + x.firstSentence : '')).join('\n');
+  }catch(e){}
+  const gk = store.get('jv_key');
+  if(gk){
+    try{
+      const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model() + ':generateContent', {
+        method:'POST', headers:{'Content-Type':'application/json','x-goog-api-key':gk},
+        body: JSON.stringify({tools:[{google_search:{}}], contents:[{role:'user', parts:[{text:'Nenne die fünf wichtigsten Weltnachrichten der letzten 24 Stunden. Heute ist ' + new Date().toLocaleDateString('de-DE', {dateStyle:'full'}) + '. Kurze deutsche Stichpunkte, ohne Einleitung.'}]}]})
+      });
+      const d = await r.json();
+      const t = d.candidates && d.candidates[0] && d.candidates[0].content.parts.map(p => p.text || '').join('');
+      if(t) return t;
+    }catch(e){}
+  }
+  add('Nachrichten konnten nicht geladen werden.', 'sys');
+  return 'Es sind gerade keine aktuellen Nachrichten abrufbar. Sag das ehrlich und erfinde nichts.';
+}
+
 /* ---------- Gemini ---------- */
+function ageNow(){
+  const b = store.get('jv_bday'); if(!b) return null;
+  const d = new Date(b), n = new Date(); let a = n.getFullYear() - d.getFullYear();
+  if(n.getMonth() < d.getMonth() || (n.getMonth() === d.getMonth() && n.getDate() < d.getDate())) a--;
+  return a >= 0 && a < 130 ? a : null;
+}
 function systemText(){
   const name = store.get('jv_name') || 'dem Nutzer';
-  const wissen = store.get('jv_wissen'), notes = getNotes();
+  const wissen = store.get('jv_wissen'), notes = relevantNotes(lastQ);
   return 'Du bist Jarvis, ein persönlicher KI-Assistent und sprichst mit ' + name + '. ' +
+    (ageNow() !== null ? 'Der Nutzer ist ' + ageNow() + ' Jahre alt. ' : '') + (store.get('jv_about') ? 'Über den Nutzer: ' + store.get('jv_about') + '\n' : '') +
     'Dein Ton: höflich, ruhig, souverän, mit trockenem Humor, wie ein britischer Butler. ' +
     'Antworte auf Deutsch und kurz (meist 1 bis 3 Sätze), weil deine Antwort vorgelesen wird. ' +
     'Keine Listen, kein Markdown, keine Sternchen, keine Emojis. ' +
     'Heute ist ' + new Date().toLocaleString('de-DE', {dateStyle:'full', timeStyle:'short'}) + '. ' +
     (locLine() ? 'Der Nutzer befindet sich gerade in: ' + locLine() + '. Du darfst ihm das auf Nachfrage sagen. ' : '') +
+    (newsCtx ? 'Aktuelle Meldungen der letzten 24 Stunden:\n' + newsCtx + '\nWenn der Nutzer nach Nachrichten fragt, nenne die 4 bis 5 wichtigsten Weltereignisse in kurzen Sätzen.\n' : '') +
     (wxLine() ? 'Aktuelles Wetter am Standort: ' + wxLine() + '. ' : '') +
     (hubText() ? 'Echte aktuelle Daten:\n' + hubText() : '') + (wissen ? 'Weiteres Wissen über den Nutzer:\n' + wissen + '\n' : '') +
-    (notes.length ? 'Notizen, die der Nutzer dir diktiert hat:\n' + notes.join('\n') + '\n' : '') +
+    (notes.length ? 'Das hat der Nutzer dir beigebracht (Einträge mit [Regel] musst du immer befolgen):\n' + notes.join('\n') + '\n' : '') +
     (!hubText() && !wissen ? 'Zu Mails und Stundenplan hast du noch keine Daten, sag das ehrlich, wenn danach gefragt wird. Alle anderen Angaben oben (Standort, Wetter, Notizen) darfst du verwenden.' : '');
 }
 async function callGemini(key){
@@ -452,6 +534,24 @@ async function callGroq(key){
   finally{ clearTimeout(timer); }
   const data = await res.json();
   if(!res.ok) throw new Error((data.error && data.error.message) || 'Groq-Fehler ' + res.status);
+  return (data.choices && data.choices[0] && data.choices[0].message.content) || 'Dazu fällt mir gerade nichts ein.';
+}
+async function callOwn(){
+  const base = store.get('jv_own').replace(/\/+$/, ''), key = store.get('jv_ownkey');
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 90000);
+  const msgs = [{role:'system', content: systemText()}].concat(history.slice(-20).map(h => ({role: h.role === 'model' ? 'assistant' : 'user', content: h.parts[0].text})));
+  let res;
+  try{
+    res = await fetch(base + '/chat/completions', {
+      method:'POST', signal: ctl.signal,
+      headers:Object.assign({'Content-Type':'application/json'}, key ? {'Authorization':'Bearer ' + key} : {}),
+      body: JSON.stringify({ model: store.get('jv_ownmodel') || 'default', messages: msgs, max_tokens: 300, temperature: 0.7 })
+    });
+  }catch(e){ throw new Error(e.name === 'AbortError' ? 'Eigener Server antwortet nicht (90 Sekunden).' : 'Eigener Server nicht erreichbar: ' + e.message); }
+  finally{ clearTimeout(timer); }
+  const data = await res.json();
+  if(!res.ok) throw new Error((data.error && (data.error.message || data.error)) || 'Serverfehler ' + res.status);
   return (data.choices && data.choices[0] && data.choices[0].message.content) || 'Dazu fällt mir gerade nichts ein.';
 }
 async function healGroq(key){
@@ -492,12 +592,16 @@ async function withHeal(call, heal, key){
   }
 }
 async function askGemini(text){
-  const gk = store.get('jv_key'), qk = store.get('jv_groq');
-  if(!gk && !qk) throw new Error('Kein API-Schlüssel eingetragen.');
+  const gk = store.get('jv_key'), qk = store.get('jv_groq'), ok = store.get('jv_own');
+  if(!gk && !qk && !ok) throw new Error('Kein API-Schlüssel eingetragen.');
   if(store.get('jv_hub') && Date.now() - hubAt > 120000){ await Promise.race([loadHub(false), new Promise(r => setTimeout(r, 8000))]); }
-  history.push({role:'user', parts:[{text}]});
+  history.push({role:'user', parts:[{text}]}); lastQ = text;
   let out, err1 = null;
-  if(qk){
+  if(ok){
+    try{ out = await callOwn(); LASTUSED = 'own'; }
+    catch(e){ err1 = e; if(qk || gk) add(e.message + ' Ich nutze vorübergehend ein Cloud-Modell.', 'sys'); }
+  }
+  if(out === undefined && qk){
     try{ out = await withHeal(callGroq, healGroq, qk); LASTUSED = 'groq'; }
     catch(e){ err1 = e; }
   }
@@ -516,7 +620,10 @@ async function handle(text){
   setState('thinking', 'Jarvis denkt nach …');
   try{
     let answer = await localCommand(text);
-    if(answer === null) answer = await askGemini(BRIEF.test(text) ? BRIEF_Q : text);
+    if(answer === null){
+      if(NEWS.test(text)){ setState('thinking', 'Hole Nachrichten …'); newsCtx = await getNews(); }
+      try{ answer = await askGemini(BRIEF.test(text) ? BRIEF_Q : text); } finally{ newsCtx = ''; }
+    }
     else history.push({role:'user', parts:[{text}]}, {role:'model', parts:[{text:answer}]});
     add(answer, 'ai');
     setState('speaking', 'Jarvis spricht … (tippe aufs Mikrofon zum Unterbrechen)');
