@@ -327,15 +327,21 @@ async function whereAmI(){
   catch(e){ return 'Ich komme nicht an deinen Standort. Erlaube Safari den Standortzugriff in den iPad-Einstellungen unter Datenschutz.'; }
   return locLine() ? 'Du bist in ' + locLine() + '.' : 'Ich habe nur Koordinaten: ' + loc.lat.toFixed(3) + ' Nord, ' + loc.lon.toFixed(3) + ' Ost.';
 }
+async function fetchWx(){
+  const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude=' + loc.lat + '&longitude=' + loc.lon + '&current=temperature_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=1');
+  const d = await r.json();
+  wx = {t:Math.round(d.current.temperature_2m), code:d.current.weather_code, wind:Math.round(d.current.wind_speed_10m),
+    max:Math.round(d.daily.temperature_2m_max[0]), min:Math.round(d.daily.temperature_2m_min[0]), rain:d.daily.precipitation_probability_max[0]};
+}
 async function loadWx(){
   if(store.get('jv_wx') !== '1'){ wx = null; loc = null; return; }
-  try{
-    await updateLoc(3600000);
-    const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude=' + loc.lat + '&longitude=' + loc.lon + '&current=temperature_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=1');
-    const d = await r.json();
-    wx = {t:Math.round(d.current.temperature_2m), code:d.current.weather_code, wind:Math.round(d.current.wind_speed_10m),
-      max:Math.round(d.daily.temperature_2m_max[0]), min:Math.round(d.daily.temperature_2m_min[0]), rain:d.daily.precipitation_probability_max[0]};
-  }catch(e){}
+  try{ await updateLoc(3600000); await fetchWx(); }catch(e){}
+}
+async function weatherAnswer(){
+  try{ await updateLoc(600000); await fetchWx(); }
+  catch(e){ return 'Das Wetter kann ich gerade nicht abrufen. Prüfe den Standortzugriff und die Internetverbindung.'; }
+  const o = loc.teil || loc.ort;
+  return (o ? 'In ' + o + ' sind es ' : 'Es sind ') + wx.t + ' Grad, ' + wxDesc(wx.code) + '. Heute werden es ' + wx.min + ' bis ' + wx.max + ' Grad, Regenwahrscheinlichkeit ' + wx.rain + ' Prozent.';
 }
 loadWx(); setInterval(loadWx, 1800000);
 
@@ -358,11 +364,14 @@ async function timerDone(){
   if(busy){ add(txt, 'sys'); return; }
   busy = true; stopListening(); add(txt, 'ai'); await speak(txt); busy = false; resume();
 }
-function localCommand(raw){
+async function localCommand(raw){
   const t = raw.toLowerCase(); let m;
-  if(/wie sp(ä|ae)t|uhrzeit|wie ?viel uhr/.test(t)) return 'Es ist ' + new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'}) + ' Uhr.';
-  if(/wo bin ich|wo sind wir|wo befinde ich mich|mein(?:en)? standort|in welcher stadt/.test(t)) return whereAmI();
-  if(/welcher tag|welches datum|welcher wochentag|der wievielte/.test(t)) return 'Heute ist ' + new Date().toLocaleDateString('de-DE', {weekday:'long', day:'numeric', month:'long', year:'numeric'}) + '.';
+  const parts = [];
+  if(/wie sp(ä|ae)t|uhrzeit|wie ?viel uhr/.test(t)) parts.push('Es ist ' + new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'}) + ' Uhr.');
+  if(/welcher tag|welches datum|welcher wochentag|der wievielte/.test(t)) parts.push('Heute ist ' + new Date().toLocaleDateString('de-DE', {weekday:'long', day:'numeric', month:'long', year:'numeric'}) + '.');
+  if(/\bwo\b.*\b(bin|sind|befinde|befinden|befind|stehe|stehen)\b|standort|(welche|welcher|welchem)\s+(stadt|ort|gegend)|wo genau/.test(t)) parts.push(await whereAmI());
+  if(/wetter|\bgrad\b|temperatur|regnet|schneit|\bregen\b|wie (kalt|warm)|brauche ich.*(jacke|schirm)/.test(t)) parts.push(await weatherAnswer());
+  if(parts.length) return parts.join(' ');
   if(/(timer|wecker).*(abbrechen|löschen|stopp|aus)|(abbrechen|lösche|stoppe?).*(timer|wecker)/.test(t)){ const n = timers.length; timers.length = 0; return n ? 'Timer gelöscht.' : 'Es läuft kein Timer.'; }
   if(/timer|wecker|erinnere mich in/.test(t)){
     let s = /halbe stunde/.test(t) ? 1800 : 0;
@@ -410,7 +419,7 @@ function systemText(){
     (wxLine() ? 'Aktuelles Wetter am Standort: ' + wxLine() + '. ' : '') +
     (hubText() ? 'Echte aktuelle Daten:\n' + hubText() : '') + (wissen ? 'Weiteres Wissen über den Nutzer:\n' + wissen + '\n' : '') +
     (notes.length ? 'Notizen, die der Nutzer dir diktiert hat:\n' + notes.join('\n') + '\n' : '') +
-    (!hubText() && !wissen ? 'Du hast noch keinen Zugriff auf Mails oder Stundenplan. Sag das ehrlich, wenn danach gefragt wird.' : '');
+    (!hubText() && !wissen ? 'Zu Mails und Stundenplan hast du noch keine Daten, sag das ehrlich, wenn danach gefragt wird. Alle anderen Angaben oben (Standort, Wetter, Notizen) darfst du verwenden.' : '');
 }
 async function callGemini(key){
   const ctl = new AbortController();
