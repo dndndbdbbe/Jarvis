@@ -61,7 +61,7 @@ small{color:var(--muted)}
 <footer>
   <div id="status">Tippe auf „Live-Gespräch starten“.</div>
   <button id="start">Live-Gespräch starten</button>
-  <button id="wake">Nur Stichwort-Modus („Jarvis …“)</button>
+  <button id="wake">Freisprechmodus („Jarvis …“)</button>
   <button id="pill" hidden>● Hört zu</button>
   <div class="typed"><input id="typed" type="text" placeholder="Oder hier tippen …" enterkeyhint="send"><button id="send">Senden</button></div>
 </footer>
@@ -79,6 +79,7 @@ small{color:var(--muted)}
     <textarea id="about" placeholder="z. B. Ich gehe in die 9. Klasse, spiele Fußball und mag Physik."></textarea>
     <label>Farbschema<br><small>Oder sag: „Jarvis, Farbschema Gold“.</small></label>
     <select id="theme"><option value="cyan">Blau (Standard)</option><option value="gold">Gold</option><option value="green">Grün</option><option value="violet">Violett</option></select>
+    <label class="opt" style="margin-bottom:12px"><input type="checkbox" id="hf" style="width:auto;margin:0"> Freisprechmodus automatisch beim ersten Tippen starten</label>
     <label class="opt" style="margin-bottom:12px"><input type="checkbox" id="wxon" style="width:auto;margin:0"> Standort und Wetter nutzen (Browser fragt nach Erlaubnis)</label>
     <label>Stimme<br><small>Männliche deutsche Stimme wählen. Bessere Stimmen: iPad-Einstellungen → Bedienungshilfen → Gesprochene Inhalte → Stimmen → Deutsch.</small></label>
     <select id="voice"></select>
@@ -221,6 +222,7 @@ $('token').value = store.get('jv_token');
 $('pitch').value = store.get('jv_pitch') || '0.7';
 $('theme').value = store.get('jv_theme') || 'cyan';
 $('wxon').checked = store.get('jv_wx') === '1';
+$('hf').checked = store.get('jv_hf') !== '0';
 $('bday').value = store.get('jv_bday'); $('about').value = store.get('jv_about');
 $('own').value = store.get('jv_own'); $('ownModel').value = store.get('jv_ownmodel'); $('ownKey').value = store.get('jv_ownkey');
 fillVoices();
@@ -241,7 +243,7 @@ $('save').onclick = () => {
   store.set('jv_token', $('token').value.trim());
   store.set('jv_pitch', $('pitch').value);
   store.set('jv_theme', $('theme').value);
-  store.set('jv_wx', $('wxon').checked ? '1' : '0');
+  store.set('jv_wx', $('wxon').checked ? '1' : '0'); store.set('jv_hf', $('hf').checked ? '1' : '0');
   store.set('jv_bday', $('bday').value); store.set('jv_about', $('about').value);
   store.set('jv_own', $('own').value.trim()); store.set('jv_ownmodel', $('ownModel').value.trim()); store.set('jv_ownkey', $('ownKey').value.trim());
   applyTheme($('theme').value);
@@ -390,6 +392,7 @@ $('kbFile').onchange = async e => {
   e.target.value = '';
 };
 const timers = [];
+let endConv = false;
 const NUM = {ein:1,eine:1,einen:1,zwei:2,drei:3,vier:4,'fünf':5,sechs:6,sieben:7,acht:8,neun:9,zehn:10,'fünfzehn':15,zwanzig:20,'dreißig':30,vierzig:40,'fünfundvierzig':45,sechzig:60};
 const num = s => { s = s.toLowerCase().replace(',', '.'); return NUM[s] !== undefined ? NUM[s] : parseFloat(s); };
 function dur(s){
@@ -407,6 +410,7 @@ async function timerDone(){
 }
 async function localCommand(raw){
   const t = raw.toLowerCase(); let m;
+  if(t.split(/\s+/).length <= 4 && /^(?:ok(?:ay)?[\s,]+)?(?:danke|vielen dank|das wars|das war's|tschüss|ende|gute nacht)\b/.test(t)){ endConv = true; return /gute nacht/.test(t) ? 'Gute Nacht.' : 'Gern geschehen.'; }
   const parts = [];
   if(/wie sp(ä|ae)t|uhrzeit|wie ?viel uhr/.test(t)) parts.push('Es ist ' + new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'}) + ' Uhr.');
   if(/welcher tag|welches datum|welcher wochentag|der wievielte/.test(t)) parts.push('Heute ist ' + new Date().toLocaleDateString('de-DE', {weekday:'long', day:'numeric', month:'long', year:'numeric'}) + '.');
@@ -631,15 +635,16 @@ async function handle(text){
   }catch(e){ add('Fehler: ' + e.message, 'sys'); }
   busy = false;
   if(active){
-    awakeUntil = Date.now() + 12000;
-    setState('listening', 'Ich höre zu … (du kannst direkt antworten)');
+    const ended = endConv; endConv = false;
+    awakeUntil = ended ? 0 : Date.now() + 20000;
+    if(ended) idleStatus(); else setState('listening', 'Ich höre zu … (du kannst direkt antworten)');
     resume();
-    setTimeout(() => { if(Date.now() >= awakeUntil && !busy) idleStatus(); }, 12200);
+    setTimeout(() => { if(Date.now() >= awakeUntil && !busy) idleStatus(); }, 20200);
   } else idleStatus();
 }
 let active = false, awakeUntil = 0, rec = null, restartT = null, wakeLock = null;
 const WAKE = /(jarvis|jarwis|yarvis|charvis|tscharvis|dscharvis|jarves|jarvie|jarvi[sz])/i;
-function idleStatus(){ setState('', active ? 'Sag „Jarvis“, um mit mir zu sprechen.' : 'Tippe auf „Live-Gespräch starten“ oder auf den Kern.'); }
+function idleStatus(){ setState('', active ? 'Sag „Jarvis“, um mit mir zu sprechen.' : (store.get('jv_hf') !== '0' ? 'Tippe einmal irgendwo. Danach reicht es, „Jarvis“ zu sagen.' : 'Tippe auf „Live-Gespräch starten“ oder auf den Kern.')); }
 function stopListening(){
   clearTimeout(restartT);
   if(rec){ rec.onend = null; rec.onresult = null; rec.onerror = null; try{ rec.abort(); }catch(e){} rec = null; }
@@ -657,7 +662,7 @@ function processFinal(t){
     const after = t.slice(m.index + m[0].length).replace(/^[\s,.:;!?-]+/, '').trim();
     cmd = after || before;
     if(!cmd){
-      awakeUntil = Date.now() + 8000;
+      awakeUntil = Date.now() + 8000; beep();
       setState('listening', 'Ja? Ich höre zu …');
       setTimeout(() => { if(Date.now() >= awakeUntil && !busy) idleStatus(); }, 8200);
       return;
@@ -690,16 +695,29 @@ function startRec(){
   try{ rec.start(); }catch(e){ rec = null; resume(); }
 }
 async function keepAwake(){ try{ if(navigator.wakeLock) wakeLock = await navigator.wakeLock.request('screen'); }catch(e){} }
+let bctx = null, userPaused = false;
+function beep(){
+  if(!bctx) return;
+  try{ bctx.resume(); const o = bctx.createOscillator(), gn = bctx.createGain(), n = bctx.currentTime;
+    o.frequency.value = 880; gn.gain.setValueAtTime(.08, n); gn.gain.exponentialRampToValueAtTime(.001, n + .18);
+    o.connect(gn); gn.connect(bctx.destination); o.start(); o.stop(n + .2); }catch(e){}
+}
 function activate(){
-  active = true; unlockSpeech(); keepAwake();
+  active = true; userPaused = false; unlockSpeech(); keepAwake();
+  try{ bctx = bctx || new (window.AudioContext || window.webkitAudioContext)(); bctx.resume(); }catch(e){}
   $('start').hidden = true; $('wake').hidden = true; $('pill').hidden = false; $('pill').className = ''; $('pill').textContent = '● Hört zu';
   idleStatus(); startRec();
 }
 function pause(){
-  active = false; stopListening();
+  active = false; userPaused = true; stopListening();
   $('pill').className = 'off'; $('pill').textContent = '○ Pausiert (tippen zum Starten)';
   idleStatus();
 }
+addEventListener('pointerdown', e => {
+  if(store.get('jv_hf') === '0' || active || live || userPaused || (e.target.closest && e.target.closest('button,input,textarea,select,label,#settings'))) return;
+  activate();
+}, true);
+setInterval(() => { if(active && !busy && !rec && !live && !document.hidden) startRec(); }, 4000);
 $('start').onclick = startLive;
 $('wake').onclick = activate;
 $('pill').onclick = () => { if(live) stopLive(); else if(active) pause(); else activate(); };
