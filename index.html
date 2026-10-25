@@ -73,6 +73,9 @@ small{color:var(--muted)}
     <input id="key" type="password" autocomplete="off" placeholder="AIza...">
     <label>Dein Name</label>
     <input id="name" type="text" placeholder="z. B. Alex">
+    <label>Farbschema<br><small>Oder sag: „Jarvis, Farbschema Gold“.</small></label>
+    <select id="theme"><option value="cyan">Blau (Standard)</option><option value="gold">Gold</option><option value="green">Grün</option><option value="violet">Violett</option></select>
+    <label class="opt" style="margin-bottom:12px"><input type="checkbox" id="wxon" style="width:auto;margin:0"> Standort und Wetter nutzen (Browser fragt nach Erlaubnis)</label>
     <label>Stimme<br><small>Männliche deutsche Stimme wählen. Bessere Stimmen: iPad-Einstellungen → Bedienungshilfen → Gesprochene Inhalte → Stimmen → Deutsch.</small></label>
     <select id="voice"></select>
     <div class="row" style="justify-content:flex-start;margin:-4px 0 12px"><button class="ghost" id="testVoice" type="button">Stimme testen</button></div>
@@ -205,6 +208,8 @@ $('groqModel').value = store.get('jv_groqmodel');
 $('hub').value = store.get('jv_hub');
 $('token').value = store.get('jv_token');
 $('pitch').value = store.get('jv_pitch') || '0.7';
+$('theme').value = store.get('jv_theme') || 'cyan';
+$('wxon').checked = store.get('jv_wx') === '1';
 fillVoices();
 $('openSettings').onclick = () => { fillVoices(); $('settings').classList.add('open'); };
 $('pitch').oninput = () => store.set('jv_pitch', $('pitch').value);
@@ -222,7 +227,10 @@ $('save').onclick = () => {
   store.set('jv_hub', $('hub').value.trim());
   store.set('jv_token', $('token').value.trim());
   store.set('jv_pitch', $('pitch').value);
-  loadHub(false);
+  store.set('jv_theme', $('theme').value);
+  store.set('jv_wx', $('wxon').checked ? '1' : '0');
+  applyTheme($('theme').value);
+  loadHub(false); loadWx();
   $('settings').classList.remove('open');
 };
 $('listModels').onclick = async () => {
@@ -292,16 +300,117 @@ $('testHub').onclick = async () => {
 loadHub(false);
 hubTimer = setInterval(() => { if(store.get('jv_hub')) loadHub(true); }, 180000);
 
+/* ---------- Wetter (Open-Meteo, ohne Schlüssel) ---------- */
+let wx = null;
+function wxDesc(c){
+  if(c === 0) return 'klar'; if(c <= 2) return 'teils bewölkt'; if(c === 3) return 'bedeckt';
+  if(c === 45 || c === 48) return 'Nebel'; if(c >= 51 && c <= 57) return 'Nieselregen';
+  if(c >= 61 && c <= 67) return 'Regen'; if(c >= 71 && c <= 77) return 'Schnee';
+  if(c >= 80 && c <= 82) return 'Schauer'; if(c >= 95) return 'Gewitter'; return 'wechselhaft';
+}
+function wxLine(){ return wx ? wx.t + ' Grad, ' + wxDesc(wx.code) + ', heute ' + wx.min + ' bis ' + wx.max + ' Grad, Regenwahrscheinlichkeit ' + wx.rain + ' Prozent, Wind ' + wx.wind + ' km/h' : ''; }
+let loc = null;
+const getPos = maxAge => new Promise((ok, no) => navigator.geolocation.getCurrentPosition(ok, no, {timeout:10000, maximumAge:maxAge}));
+async function updateLoc(maxAge){
+  const p = await getPos(maxAge), lat = p.coords.latitude, lon = p.coords.longitude;
+  let a = {};
+  try{
+    const r = await fetch('https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=14&accept-language=de&lat=' + lat + '&lon=' + lon);
+    a = (await r.json()).address || {};
+  }catch(e){}
+  loc = {lat, lon, acc:Math.round(p.coords.accuracy), ort:a.city || a.town || a.village || a.municipality || '', teil:a.suburb || a.city_district || a.neighbourhood || '', land:a.country || ''};
+  return loc;
+}
+function locLine(){ return loc ? [loc.teil, loc.ort, loc.land].filter(Boolean).join(', ') : ''; }
+async function whereAmI(){
+  try{ await updateLoc(60000); }
+  catch(e){ return 'Ich komme nicht an deinen Standort. Erlaube Safari den Standortzugriff in den iPad-Einstellungen unter Datenschutz.'; }
+  return locLine() ? 'Du bist in ' + locLine() + '.' : 'Ich habe nur Koordinaten: ' + loc.lat.toFixed(3) + ' Nord, ' + loc.lon.toFixed(3) + ' Ost.';
+}
+async function loadWx(){
+  if(store.get('jv_wx') !== '1'){ wx = null; loc = null; return; }
+  try{
+    await updateLoc(3600000);
+    const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude=' + loc.lat + '&longitude=' + loc.lon + '&current=temperature_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=1');
+    const d = await r.json();
+    wx = {t:Math.round(d.current.temperature_2m), code:d.current.weather_code, wind:Math.round(d.current.wind_speed_10m),
+      max:Math.round(d.daily.temperature_2m_max[0]), min:Math.round(d.daily.temperature_2m_min[0]), rain:d.daily.precipitation_probability_max[0]};
+  }catch(e){}
+}
+loadWx(); setInterval(loadWx, 1800000);
+
+/* ---------- Notizen, Timer, lokale Befehle (ohne KI, sofort) ---------- */
+const getNotes = () => { try{ return JSON.parse(store.get('jv_notes') || '[]'); }catch(e){ return []; } };
+const setNotes = a => store.set('jv_notes', JSON.stringify(a.slice(-40)));
+const timers = [];
+const NUM = {ein:1,eine:1,einen:1,zwei:2,drei:3,vier:4,'fünf':5,sechs:6,sieben:7,acht:8,neun:9,zehn:10,'fünfzehn':15,zwanzig:20,'dreißig':30,vierzig:40,'fünfundvierzig':45,sechzig:60};
+const num = s => { s = s.toLowerCase().replace(',', '.'); return NUM[s] !== undefined ? NUM[s] : parseFloat(s); };
+function dur(s){
+  const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60, p = [];
+  if(h) p.push(h + (h > 1 ? ' Stunden' : ' Stunde')); if(m) p.push(m + (m > 1 ? ' Minuten' : ' Minute')); if(x) p.push(x + (x > 1 ? ' Sekunden' : ' Sekunde'));
+  return p.join(' und ');
+}
+function fmt(s){ const h = Math.floor(s/3600), m = String(Math.floor(s%3600/60)).padStart(2,'0'), x = String(s%60).padStart(2,'0'); return (h ? h + ':' : '') + m + ':' + x; }
+setInterval(() => { for(let i = timers.length - 1; i >= 0; i--){ if(Date.now() >= timers[i].end){ timers.splice(i, 1); timerDone(); } } }, 500);
+async function timerDone(){
+  if(live && live.ready){ live.ws.send(JSON.stringify({clientContent:{turns:[{role:'user', parts:[{text:'(System) Der Timer ist abgelaufen. Sag es kurz.'}]}], turnComplete:true}})); return; }
+  const txt = 'Dein Timer ist abgelaufen.';
+  if(busy){ add(txt, 'sys'); return; }
+  busy = true; stopListening(); add(txt, 'ai'); await speak(txt); busy = false; resume();
+}
+function localCommand(raw){
+  const t = raw.toLowerCase(); let m;
+  if(/wie sp(ä|ae)t|uhrzeit|wie ?viel uhr/.test(t)) return 'Es ist ' + new Date().toLocaleTimeString('de-DE', {hour:'2-digit', minute:'2-digit'}) + ' Uhr.';
+  if(/wo bin ich|wo sind wir|wo befinde ich mich|mein(?:en)? standort|in welcher stadt/.test(t)) return whereAmI();
+  if(/welcher tag|welches datum|welcher wochentag|der wievielte/.test(t)) return 'Heute ist ' + new Date().toLocaleDateString('de-DE', {weekday:'long', day:'numeric', month:'long', year:'numeric'}) + '.';
+  if(/(timer|wecker).*(abbrechen|löschen|stopp|aus)|(abbrechen|lösche|stoppe?).*(timer|wecker)/.test(t)){ const n = timers.length; timers.length = 0; return n ? 'Timer gelöscht.' : 'Es läuft kein Timer.'; }
+  if(/timer|wecker|erinnere mich in/.test(t)){
+    let s = /halbe stunde/.test(t) ? 1800 : 0;
+    for(const x of t.matchAll(/(\d+(?:[.,]\d+)?|[a-zäöüß]+)\s*(sekunden?|minuten?|min\b|stunden?)/g)){
+      const n = num(x[1]); if(isNaN(n)) continue;
+      s += n * (/^st/.test(x[2]) ? 3600 : /^se/.test(x[2]) ? 1 : 60);
+    }
+    s = Math.round(s);
+    if(!s) return 'Wie lange soll der Timer laufen? Sag zum Beispiel: Timer auf fünf Minuten.';
+    timers.push({end: Date.now() + s * 1000});
+    return 'Timer auf ' + dur(s) + ' gestellt.';
+  }
+  if((m = t.match(/(?:rechne|berechne|was ist|wie ?viel ist|ergibt).*?(-?\d+(?:[.,]\d+)?)\s*(plus|minus|mal|geteilt durch|durch|\+|-|\*|x|×|\/|:)\s*(-?\d+(?:[.,]\d+)?)/))){
+    const a = parseFloat(m[1].replace(',', '.')), b = parseFloat(m[3].replace(',', '.')), o = m[2];
+    if(/durch|\/|:/.test(o) && b === 0) return 'Durch null zu teilen wäre mutig, aber nein.';
+    const r = /plus|\+/.test(o) ? a + b : /minus|^-$/.test(o) ? a - b : /durch|\/|:/.test(o) ? a / b : a * b;
+    return 'Das ergibt ' + String(+r.toFixed(4)).replace('.', ',') + '.';
+  }
+  if(/würfel/.test(t)) return 'Eine ' + (1 + Math.floor(Math.random() * 6)) + '.';
+  if(/münze|kopf oder zahl/.test(t)) return Math.random() < .5 ? 'Kopf.' : 'Zahl.';
+  if(/(vergiss|lösche|leere).*(notizen|alles)/.test(t)){ setNotes([]); return 'Alle Notizen gelöscht.'; }
+  if(/was hast du dir gemerkt|meine notizen|lies.*notizen/.test(t)){ const n = getNotes(); return n.length ? 'Du hast ' + n.length + ' Notizen. Zuletzt: ' + n.slice(-3).map(x => x.replace(/^\[[^\]]*\]\s*/, '')).join('. ') + '.' : 'Ich habe keine Notizen von dir.'; }
+  if((m = raw.match(/(?:merk(?:e)? dir|notiere(?: dir)?|speichere)[\s,:]*(?:dass\s+)?(.+)/i))){
+    const n = getNotes(); n.push('[' + new Date().toLocaleDateString('de-DE') + '] ' + m[1].trim()); setNotes(n); return 'Notiert.';
+  }
+  if((m = t.match(/(?:farbe|farbschema|design|theme)\s*(?:auf|zu)?\s*(blau|cyan|gold|gelb|orange|grün|gruen|lila|violett)/))){
+    const k = /blau|cyan/.test(m[1]) ? 'cyan' : /gold|gelb|orange/.test(m[1]) ? 'gold' : /gr/.test(m[1]) ? 'green' : 'violet';
+    store.set('jv_theme', k); $('theme').value = k; applyTheme(k); return 'Farbschema geändert.';
+  }
+  return null;
+}
+const BRIEF = /guten morgen|briefing|lagebericht|tages(?:ü|ue)berblick/i;
+const BRIEF_Q = 'Gib mir ein kurzes Morgenbriefing in höchstens fünf Sätzen: Uhrzeit, Wetter (falls bekannt), Stundenplan für heute, ungelesene Mails und meine Notizen, falls relevant.';
+
 /* ---------- Gemini ---------- */
 function systemText(){
   const name = store.get('jv_name') || 'dem Nutzer';
-  const wissen = store.get('jv_wissen');
+  const wissen = store.get('jv_wissen'), notes = getNotes();
   return 'Du bist Jarvis, ein persönlicher KI-Assistent und sprichst mit ' + name + '. ' +
     'Dein Ton: höflich, ruhig, souverän, mit trockenem Humor, wie ein britischer Butler. ' +
     'Antworte auf Deutsch und kurz (meist 1 bis 3 Sätze), weil deine Antwort vorgelesen wird. ' +
     'Keine Listen, kein Markdown, keine Sternchen, keine Emojis. ' +
     'Heute ist ' + new Date().toLocaleString('de-DE', {dateStyle:'full', timeStyle:'short'}) + '. ' +
-    (hubText() ? 'Echte aktuelle Daten:\n' + hubText() : '') + (wissen ? 'Weiteres Wissen über den Nutzer:\n' + wissen : '') + (!hubText() && !wissen ? 'Du hast noch keinen Zugriff auf Mails oder Stundenplan. Sag das ehrlich, wenn danach gefragt wird.' : '');
+    (locLine() ? 'Der Nutzer befindet sich gerade in: ' + locLine() + '. Du darfst ihm das auf Nachfrage sagen. ' : '') +
+    (wxLine() ? 'Aktuelles Wetter am Standort: ' + wxLine() + '. ' : '') +
+    (hubText() ? 'Echte aktuelle Daten:\n' + hubText() : '') + (wissen ? 'Weiteres Wissen über den Nutzer:\n' + wissen + '\n' : '') +
+    (notes.length ? 'Notizen, die der Nutzer dir diktiert hat:\n' + notes.join('\n') + '\n' : '') +
+    (!hubText() && !wissen ? 'Du hast noch keinen Zugriff auf Mails oder Stundenplan. Sag das ehrlich, wenn danach gefragt wird.' : '');
 }
 async function callGemini(key){
   const ctl = new AbortController();
@@ -397,7 +506,9 @@ async function handle(text){
   add(text, 'me');
   setState('thinking', 'Jarvis denkt nach …');
   try{
-    const answer = await askGemini(text);
+    let answer = await localCommand(text);
+    if(answer === null) answer = await askGemini(BRIEF.test(text) ? BRIEF_Q : text);
+    else history.push({role:'user', parts:[{text}]}, {role:'model', parts:[{text:answer}]});
     add(answer, 'ai');
     setState('speaking', 'Jarvis spricht … (tippe aufs Mikrofon zum Unterbrechen)');
     await speak(answer);
@@ -412,7 +523,7 @@ async function handle(text){
 }
 let active = false, awakeUntil = 0, rec = null, restartT = null, wakeLock = null;
 const WAKE = /(jarvis|jarwis|yarvis|charvis|tscharvis|dscharvis|jarves|jarvie|jarvi[sz])/i;
-function idleStatus(){ setState('', active ? 'Sag „Jarvis“, um mit mir zu sprechen.' : 'Tippe auf „Live-Gespräch starten“.'); }
+function idleStatus(){ setState('', active ? 'Sag „Jarvis“, um mit mir zu sprechen.' : 'Tippe auf „Live-Gespräch starten“ oder auf den Kern.'); }
 function stopListening(){
   clearTimeout(restartT);
   if(rec){ rec.onend = null; rec.onresult = null; rec.onerror = null; try{ rec.abort(); }catch(e){} rec = null; }
@@ -476,6 +587,7 @@ function pause(){
 $('start').onclick = startLive;
 $('wake').onclick = activate;
 $('pill').onclick = () => { if(live) stopLive(); else if(active) pause(); else activate(); };
+$('stage').onclick = () => { if(!live && !busy && !active) startLive(); };
 document.addEventListener('visibilitychange', () => {
   if(document.hidden){ stopListening(); }
   else if(active){ keepAwake(); resume(); }
@@ -508,7 +620,7 @@ function livePlay(data){
   const bin = atob(data), n = bin.length >> 1;
   const buf = live.ctx.createBuffer(1, n, 24000), ch = buf.getChannelData(0);
   for(let i = 0; i < n; i++){ let v = bin.charCodeAt(2*i) | (bin.charCodeAt(2*i+1) << 8); if(v >= 32768) v -= 65536; ch[i] = v / 32768; }
-  const src = live.ctx.createBufferSource(); src.buffer = buf; src.connect(live.ctx.destination);
+  const src = live.ctx.createBufferSource(); src.buffer = buf; src.connect(live.anOut || live.ctx.destination);
   const now = live.ctx.currentTime;
   if(live.next < now + 0.03) live.next = now + 0.06;
   src.start(live.next); live.next += buf.duration;
@@ -555,7 +667,7 @@ async function startLive(){
     if(store.get('jv_hub') && Date.now() - hubAt > 120000){ await Promise.race([loadHub(false), new Promise(r => setTimeout(r, 6000))]); }
     const modelName = await findLiveModel(key);
     const ws = new WebSocket('wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=' + encodeURIComponent(key));
-    live = {ws, ctx, stream, model: modelName, ready:false, next:0, sources:new Set(), inTxt:'', outTxt:'', last:Date.now(), timer:null, src:null, proc:null};
+    live = {ws, ctx, stream, model: modelName, ready:false, next:0, sources:new Set(), inTxt:'', outTxt:'', last:Date.now(), timer:null, src:null, proc:null, anIn:null, anOut:null};
     $('start').hidden = true; $('wake').hidden = true; $('pill').hidden = false; $('pill').className = ''; $('pill').textContent = '● Live – tippen zum Beenden';
     ws.onopen = () => {
       ws.send(JSON.stringify({setup:{
@@ -574,6 +686,10 @@ async function startLive(){
     ws.onerror = () => {};
     ws.onclose = ev => { if(live && live.ws === ws) stopLive('Live-Gespräch beendet' + (ev.reason ? ': ' + ev.reason : ' (Code ' + ev.code + ')') + '.'); };
     const src = ctx.createMediaStreamSource(stream);
+    const anIn = ctx.createAnalyser(), anOut = ctx.createAnalyser();
+    anIn.fftSize = anOut.fftSize = 64; anIn.smoothingTimeConstant = anOut.smoothingTimeConstant = .7;
+    anOut.connect(ctx.destination); src.connect(anIn);
+    live.anIn = anIn; live.anOut = anOut;
     const proc = ctx.createScriptProcessor(4096, 1, 1);
     proc.onaudioprocess = ev => {
       if(!live || !live.ready || ws.readyState !== 1) return;
@@ -613,13 +729,16 @@ function stopLive(msg){
 }
 document.addEventListener('visibilitychange', () => { if(document.hidden && live) stopLive('Live-Gespräch pausiert, weil die Seite im Hintergrund war.'); });
 
-/* ---------- Hintergrund: HUD-Animation ---------- */
+/* ---------- Hintergrund: HUD mit echtem Audio-Spektrum ---------- */
 const cv = $('bg'), g = cv.getContext('2d');
 const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
-let W, H, t = 0, px = 0, py = 0, tx = 0, ty = 0, energy = .25, hue = [76,201,240];
-const COL = {'':[76,201,240], listening:[255,107,107], thinking:[244,201,93], speaking:[123,216,143]};
+const THEMES = {cyan:[76,201,240], gold:[255,176,59], green:[90,230,150], violet:[176,128,255]};
+const COL = {'':THEMES.cyan.slice(), listening:[255,107,107], thinking:[244,201,93], speaking:[123,216,143]};
 const NRG = {'':.25, listening:.65, thinking:.5, speaking:1};
-const ripples = [];
+let W, H, t = 0, px = 0, py = 0, tx = 0, ty = 0, energy = .25, hue = [76,201,240], boot = 0;
+function applyTheme(n){ const c = THEMES[n] || THEMES.cyan; COL[''] = c.slice(); document.documentElement.style.setProperty('--accent', 'rgb(' + c.join(',') + ')'); }
+applyTheme(store.get('jv_theme'));
+const ripples = [], bars = new Float32Array(96);
 const pts = Array.from({length:60}, () => ({x:Math.random(), y:Math.random(), vx:(Math.random()-.5)*.00025, vy:(Math.random()-.5)*.00025}));
 function resize(){
   const d = Math.min(devicePixelRatio || 1, 2);
@@ -632,21 +751,52 @@ function move(e){ const p = e.touches ? e.touches[0] : e; tx = (p.clientX/W - .5
 addEventListener('pointermove', move);
 addEventListener('pointerdown', e => { move(e); ripples.push({x:e.clientX, y:e.clientY, r:0}); });
 const rgba = (c,a) => 'rgba(' + (c[0]|0) + ',' + (c[1]|0) + ',' + (c[2]|0) + ',' + a + ')';
+function spectrum(){
+  if(!live || !live.anIn) return null;
+  const a = new Uint8Array(32), b = new Uint8Array(32); let sa = 0, sb = 0;
+  live.anIn.getByteFrequencyData(a); live.anOut.getByteFrequencyData(b);
+  for(let i = 0; i < 32; i++){ sa += a[i]; sb += b[i]; }
+  return sb > sa ? b : a;
+}
+function panel(x, y, w, h, title, c){
+  g.strokeStyle = rgba(c,.6); g.lineWidth = 1.5;
+  [[x,y,1,1],[x+w,y,-1,1],[x,y+h,1,-1],[x+w,y+h,-1,-1]].forEach(([a,b,dx,dy]) => { g.beginPath(); g.moveTo(a+dx*12,b); g.lineTo(a,b); g.lineTo(a,b+dy*12); g.stroke(); });
+  g.fillStyle = rgba(c,.07); g.fillRect(x,y,w,h);
+  g.fillStyle = rgba(c,.65); g.font = '11px ui-monospace, Menlo, monospace'; g.fillText(title, x+10, y+16);
+}
 function frame(){
   t += reduce ? .002 : .016;
+  boot = Math.min(1, boot + (reduce ? 1 : .0075)); const bt = 1 - Math.pow(1 - boot, 3);
   const tc = COL[STATE] || COL[''];
   for(let i=0;i<3;i++) hue[i] += (tc[i]-hue[i])*.06;
-  energy += ((NRG[STATE] ?? .25) - energy)*.05;
+  const spec = spectrum(); let lvl = 0;
+  if(spec){ for(let i=0;i<32;i++) lvl += spec[i]; lvl /= 32*255; }
+  const target = spec ? Math.min(1, .25 + lvl*3.2) : (NRG[STATE] ?? .25);
+  energy += (target - energy)*(spec ? .2 : .05);
   px += (tx-px)*.06; py += (ty-py)*.06;
   const c = hue, sp = reduce ? .1 : 1;
   g.clearRect(0,0,W,H);
-  const cx = W/2 + px*30, cy = H*.36 + py*30, R = Math.min(W*.42, H*.3);
+  g.textAlign = 'left';
+  const cx = W/2 + px*30, cy = H*.36 + py*30, R = Math.min(W*.42, H*.3) * (.35 + .65*bt);
+  g.globalAlpha = bt;
   const bgG = g.createRadialGradient(cx,cy,0,cx,cy,Math.max(W,H)*.7);
-  bgG.addColorStop(0, rgba(c,.12+energy*.08)); bgG.addColorStop(1, 'rgba(5,11,20,0)');
+  bgG.addColorStop(0, rgba(c,.12+energy*.1)); bgG.addColorStop(1, 'rgba(5,11,20,0)');
   g.fillStyle = bgG; g.fillRect(0,0,W,H);
   // Raster
   g.fillStyle = rgba(c,.12);
   for(let x=(px*-20)%48; x<W; x+=48) for(let y=(py*-20)%48; y<H; y+=48) g.fillRect(x,y,1.5,1.5);
+  // Datenstrom am Rand
+  if(W >= 700){
+    g.font = '11px ui-monospace, Menlo, monospace';
+    for(let k=0;k<8;k++){
+      const x = k < 4 ? 250 + k*16 : W - 250 - (k-4)*16;
+      for(let j=0;j<16;j++){
+        const s = Math.floor(Math.abs(Math.sin(k*78.2 + j*12.9 + Math.floor(t*(2+k%3)))*43758)) % 16;
+        g.fillStyle = rgba(c, .05 + .1*((j + t*8*(k%2?1:-1) + k*3) % 16 + 16) % 16 / 16 * .6);
+        g.fillText(s.toString(16).toUpperCase(), x, H*.12 + j*14);
+      }
+    }
+  }
   // Partikel
   g.lineWidth = 1;
   pts.forEach(p => {
@@ -659,8 +809,7 @@ function frame(){
   });
   // Ringe
   const spin = (STATE === 'thinking' ? 3 : 1) * sp;
-  const rings = [[.55,6,.35,1,2],[.7,10,.5,-1,1.5],[.85,3,.25,1,2.5],[1,40,.9,-1,1]];
-  rings.forEach(([k,n,fill,dir,w],i) => {
+  [[.55,6,.35,1,2],[.7,10,.5,-1,1.5],[.85,3,.25,1,2.5],[1,40,.9,-1,1]].forEach(([k,n,fill,dir,w],i) => {
     g.strokeStyle = rgba(c,.35+energy*.35); g.lineWidth = w;
     const seg = 6.283/n;
     for(let j=0;j<n;j++){
@@ -668,21 +817,32 @@ function frame(){
       g.beginPath(); g.arc(cx,cy,R*k,a0,a0+seg*fill); g.stroke();
     }
   });
+  // Radar-Sweep mit Schweif
+  const sw = t*1.4*sp;
+  g.lineWidth = 2;
+  for(let i=0;i<28;i++){
+    g.strokeStyle = rgba(c,.28*(1-i/28)); g.beginPath(); g.arc(cx,cy,R*.78,sw-i*.035-.035,sw-i*.035); g.stroke();
+  }
+  g.strokeStyle = rgba(c,.8); g.beginPath(); g.moveTo(cx+Math.cos(sw)*R*.46, cy+Math.sin(sw)*R*.46); g.lineTo(cx+Math.cos(sw)*R*.78, cy+Math.sin(sw)*R*.78); g.stroke();
   // Skala
   g.strokeStyle = rgba(c,.5); g.lineWidth = 1;
   for(let i=0;i<72;i++){
     const a = i/72*6.283 - t*.08*sp, l = i%6 ? 5 : 12;
     g.beginPath(); g.moveTo(cx+Math.cos(a)*R*1.12, cy+Math.sin(a)*R*1.12); g.lineTo(cx+Math.cos(a)*(R*1.12+l), cy+Math.sin(a)*(R*1.12+l)); g.stroke();
   }
-  // Wellenring
-  g.strokeStyle = rgba(c,.8); g.lineWidth = 2;
+  // Spektrumring: echtes Audio im Live-Modus, sonst simuliert
+  g.strokeStyle = rgba(c,.85); g.lineWidth = 2.5; g.lineCap = 'round';
   for(let i=0;i<96;i++){
-    const a = i/96*6.283, w = (Math.sin(a*5+t*4*sp)+Math.sin(a*9-t*3*sp))*.5;
-    const l = 4 + energy*18*(.4+Math.abs(w));
+    const a = i/96*6.283 - 1.57, k = i < 48 ? i : 95 - i;
+    const w = (Math.sin(a*5+t*4*sp)+Math.sin(a*9-t*3*sp))*.5;
+    const v = spec ? spec[Math.min(31, Math.floor(k/48*26))]/255 : energy*(.35+.65*Math.abs(w));
+    bars[i] += (v - bars[i])*.35;
+    const l = 3 + bars[i]*R*.55;
     g.beginPath(); g.moveTo(cx+Math.cos(a)*R*.42, cy+Math.sin(a)*R*.42); g.lineTo(cx+Math.cos(a)*(R*.42+l), cy+Math.sin(a)*(R*.42+l)); g.stroke();
   }
+  g.lineCap = 'butt';
   // Kern
-  const cr = R*.26*(1+.07*Math.sin(t*(2+energy*4))*energy*1.5);
+  const cr = R*.26*(1+.07*Math.sin(t*(2+energy*4))*energy*1.5 + lvl*.5);
   const core = g.createRadialGradient(cx,cy,0,cx,cy,cr*2.4);
   core.addColorStop(0,'rgba(255,255,255,.95)'); core.addColorStop(.25, rgba(c,.9)); core.addColorStop(1, rgba(c,0));
   g.fillStyle = core; g.beginPath(); g.arc(cx,cy,cr*2.4,0,6.283); g.fill();
@@ -691,21 +851,50 @@ function frame(){
   for(let i=0;i<3;i++){ const a = i*2.094 + t*.5*sp - 1.57; g.lineTo(cx+Math.cos(a)*cr*1.1, cy+Math.sin(a)*cr*1.1); }
   g.closePath(); g.stroke();
   g.beginPath(); g.arc(cx,cy,cr*1.25,0,6.283); g.stroke();
+  // Scanlinie
+  const sy = (t*70*sp) % (H+80) - 40;
+  const sl = g.createLinearGradient(0,sy-30,0,sy);
+  sl.addColorStop(0, rgba(c,0)); sl.addColorStop(1, rgba(c,.07));
+  g.fillStyle = sl; g.fillRect(0,sy-30,W,30);
   // Tipp-Wellen
   for(let i=ripples.length-1;i>=0;i--){
-    const r = ripples[i]; r.r += 5; 
+    const r = ripples[i]; r.r += 5;
     if(r.r > 260){ ripples.splice(i,1); continue; }
     g.strokeStyle = rgba(c,.6*(1-r.r/260)); g.lineWidth = 2; g.beginPath(); g.arc(r.x,r.y,r.r,0,6.283); g.stroke();
   }
+  g.globalAlpha = 1;
   // Anzeigen
-  g.fillStyle = rgba(c,.75); g.font = '12px ui-monospace, Menlo, monospace';
   const now = new Date();
-  g.textAlign = 'left'; g.fillText(now.toLocaleTimeString('de-DE'), 18, 84);
-  g.fillText('SYSTEM ONLINE', 18, 100);
-  g.textAlign = 'right';
   const lbl = {'':'BEREIT', listening:'HÖRT ZU', thinking:'ANALYSE', speaking:'ANTWORTET'}[STATE] || 'BEREIT';
-  g.fillText(lbl, W-18, 84);
-  g.fillText(activeModel().toUpperCase(), W-18, 100);
+  g.font = '12px ui-monospace, Menlo, monospace';
+  if(boot < 1){
+    g.fillStyle = rgba(c,.9*(1-boot)); g.textAlign = 'center'; g.fillText('SYSTEME WERDEN INITIALISIERT … ' + Math.round(boot*100) + ' %', W/2, cy + R*1.5); g.textAlign = 'left';
+  }
+  const L = [now.toLocaleDateString('de-DE', {weekday:'long', day:'numeric', month:'long'})];
+  if(loc && locLine()) L.push((loc.teil || loc.ort));
+  if(wx) L.push(wx.t + '°C ' + wxDesc(wx.code));
+  timers.slice(0,3).forEach(x => L.push('TIMER ' + fmt(Math.max(0, Math.round((x.end - Date.now())/1000)))));
+  const unread = hub && hub.mails ? hub.mails.filter(m => !m.gelesen).length : null;
+  const R2 = [lbl, activeModel().toUpperCase()];
+  if(unread !== null) R2.push(unread + ' UNGELESENE MAILS');
+  if(live) R2.push('LIVE-AUDIO AKTIV');
+  g.globalAlpha = bt;
+  if(W >= 700){
+    panel(18, 76, 230, 54 + L.length*16, '// ZEIT & LAGE', c);
+    g.fillStyle = rgba(c,.95); g.font = '600 22px ui-monospace, Menlo, monospace'; g.fillText(now.toLocaleTimeString('de-DE'), 28, 110);
+    g.font = '12px ui-monospace, Menlo, monospace'; g.fillStyle = rgba(c,.8);
+    L.forEach((s,i) => g.fillText(s.toUpperCase(), 28, 130 + i*16));
+    const rx = W - 248, rh = 40 + R2.length*16;
+    panel(rx, 76, 230, rh, '// STATUS', c);
+    g.fillStyle = rgba(c,.95); g.font = '600 16px ui-monospace, Menlo, monospace'; g.fillText(R2[0], rx + 10, 104);
+    g.font = '12px ui-monospace, Menlo, monospace'; g.fillStyle = rgba(c,.8);
+    R2.slice(1).forEach((s,i) => g.fillText(s, rx + 10, 124 + i*16));
+  } else {
+    g.fillStyle = rgba(c,.75);
+    g.fillText(now.toLocaleTimeString('de-DE'), 18, 84); g.fillText(L[1] || 'SYSTEM ONLINE', 18, 100);
+    g.textAlign = 'right'; g.fillText(lbl, W-18, 84); g.fillText(timers.length ? 'TIMER ' + fmt(Math.max(0, Math.round((timers[0].end - Date.now())/1000))) : activeModel().toUpperCase(), W-18, 100); g.textAlign = 'left';
+  }
+  g.globalAlpha = 1;
   requestAnimationFrame(frame);
 }
 frame();
