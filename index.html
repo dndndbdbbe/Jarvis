@@ -16,11 +16,12 @@ header,#stage,#log,footer{position:relative;z-index:1}
 header{display:flex;justify-content:space-between;align-items:center;padding:14px 18px}
 h1{font-size:20px;margin:0;font-weight:600;letter-spacing:.2em}
 header button{background:rgba(10,22,36,.6);border:1px solid var(--line);color:var(--muted);border-radius:10px;padding:8px 12px;font-size:15px}
-#stage{flex:1;min-height:120px}
-#log{max-height:30vh;overflow-y:auto;padding:8px 18px;display:flex;flex-direction:column;gap:8px}
+#stage{flex:1;min-height:120px;touch-action:none}
+#log{max-height:24vh;overflow-y:auto;padding:8px 18px;display:flex;flex-direction:column;gap:8px}
 .msg{max-width:80%;padding:9px 14px;border-radius:14px;white-space:pre-wrap;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
 .me{align-self:flex-end;background:rgba(34,70,100,.7);border:1px solid var(--line)}
 .ai{align-self:flex-start;background:var(--panel);border:1px solid var(--line)}
+.news{display:flex;flex-direction:column;gap:12px;width:min(80%,420px)}.news img{width:100%;border-radius:10px;display:block}.news figcaption{font-size:14px;color:var(--muted);margin-top:4px}
 .sys{align-self:center;color:var(--muted);font-size:15px;text-align:center}
 footer{padding:10px 18px 16px;display:flex;flex-direction:column;align-items:center;gap:10px}
 #status{color:var(--muted);min-height:22px;font-size:15px;text-align:center}
@@ -138,6 +139,7 @@ function add(text, cls){
   d.className = 'msg ' + cls; d.textContent = text;
   if(cls === 'ai'){ d.style.cursor = 'pointer'; d.title = 'Tippen zum Vorlesen'; d.onclick = async () => { stopListening(); await speak(text); resume(); }; }
   $('log').appendChild(d); $('log').scrollTop = $('log').scrollHeight;
+  if(cls === 'me' || cls === 'ai') emitWords(text, cls === 'ai' ? 1 : -1);
 }
 function setState(cls, text){ STATE = cls; $('status').textContent = text; }
 
@@ -181,6 +183,7 @@ function speakChunk(text, voice){
     const fin = ok => { if(!done){ done = true; clearTimeout(wd); resolve(ok); } };
     const wd = setTimeout(() => { if(!started) fin(false); }, 5000);
     u.onstart = () => { started = true; };
+    u.onboundary = () => { pulse = 1; };
     u.onend = () => fin(true);
     u.onerror = () => fin(started);
     speechSynthesis.speak(u);
@@ -456,34 +459,43 @@ const BRIEF = /guten morgen|briefing|lagebericht|tages(?:ü|ue)berblick/i;
 const BRIEF_Q = 'Gib mir ein kurzes Morgenbriefing in höchstens fünf Sätzen: Uhrzeit, Wetter (falls bekannt), Stundenplan für heute, ungelesene Mails und meine Notizen, falls relevant.';
 
 /* ---------- Nachrichten der letzten 24 Stunden ---------- */
-const NEWS = /nachrichten|neuigkeiten|weltgeschehen|was gibt.?s neues|\bnews\b|letzten 24 stunden|(passiert|los ist).*(welt|heute|gestern|stunden)|(welt|heute|gestern).*passiert/i;
-let newsCtx = '';
-async function getNews(){
+const NEWS = /nachrichten|neuigkeiten|weltgeschehen|was gibt.?s neues|\bnews\b|letzten 24 stunden|wichtigste[nr]?\s+(ereignis|nachricht|meldung)|(passiert|los ist).*(welt|heute|gestern|stunden)|(welt|heute|gestern).*passiert/i;
+let newsCtx = '', newsN = 3, newsItems = [];
+async function getNews(q){
+  const mm = (q || '').toLowerCase().match(/\b(\d|ein|eine|einen|zwei|drei|vier|fünf)\s+(?:der\s+)?wichtigste/);
+  newsN = Math.max(1, Math.min(5, mm ? (num(mm[1]) || 3) : 3));
   try{
     const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 10000);
     const r = await fetch('https://www.tagesschau.de/api2u/homepage/', {signal:ctl.signal}); clearTimeout(tm);
     const d = await r.json(), since = Date.now() - 864e5;
     let items = (d.news || []).filter(x => x.title);
+    const stories = items.filter(x => !x.type || x.type === 'story'); if(stories.length) items = stories;
     const recent = items.filter(x => !x.date || new Date(x.date).getTime() >= since);
     items = (recent.length ? recent : items).slice(0, 14);
-    if(items.length) return items.map(x => '- ' + (x.topline ? x.topline + ': ' : '') + x.title + (x.firstSentence ? '. ' + x.firstSentence : '')).join('\n');
+    if(items.length){
+      const pics = items.slice(0, newsN).map(x => {
+        const v = (x.teaserImage && x.teaserImage.imageVariants) || {};
+        const u = v['16x9-640'] || v['16x9-512'] || v['16x9-960'] || Object.values(v)[0];
+        return u && /^https:\/\//.test(u) ? {title:x.title, img:u, url:/^https:\/\//.test(x.shareURL || '') ? x.shareURL : ''} : null;
+      }).filter(Boolean);
+      return {text: items.map((x, i) => (i + 1) + '. ' + (x.topline ? x.topline + ': ' : '') + x.title + (x.firstSentence ? '. ' + x.firstSentence : '')).join('\n'), items: pics};
+    }
   }catch(e){}
   const gk = store.get('jv_key');
   if(gk){
     try{
       const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model() + ':generateContent', {
         method:'POST', headers:{'Content-Type':'application/json','x-goog-api-key':gk},
-        body: JSON.stringify({tools:[{google_search:{}}], contents:[{role:'user', parts:[{text:'Nenne die fünf wichtigsten Weltnachrichten der letzten 24 Stunden. Heute ist ' + new Date().toLocaleDateString('de-DE', {dateStyle:'full'}) + '. Kurze deutsche Stichpunkte, ohne Einleitung.'}]}]})
+        body: JSON.stringify({tools:[{google_search:{}}], contents:[{role:'user', parts:[{text:'Nenne die ' + newsN + ' wichtigsten Weltnachrichten der letzten 24 Stunden. Heute ist ' + new Date().toLocaleDateString('de-DE', {dateStyle:'full'}) + '. Kurze deutsche Stichpunkte, ohne Einleitung.'}]}]})
       });
       const d = await r.json();
       const t = d.candidates && d.candidates[0] && d.candidates[0].content.parts.map(p => p.text || '').join('');
-      if(t) return t;
+      if(t) return {text:t, items:[]};
     }catch(e){}
   }
   add('Nachrichten konnten nicht geladen werden.', 'sys');
-  return 'Es sind gerade keine aktuellen Nachrichten abrufbar. Sag das ehrlich und erfinde nichts.';
+  return {text:'Es sind gerade keine aktuellen Nachrichten abrufbar. Sag das ehrlich und erfinde nichts.', items:[]};
 }
-
 /* ---------- Gemini ---------- */
 function ageNow(){
   const b = store.get('jv_bday'); if(!b) return null;
@@ -501,7 +513,7 @@ function systemText(){
     'Keine Listen, kein Markdown, keine Sternchen, keine Emojis. ' +
     'Heute ist ' + new Date().toLocaleString('de-DE', {dateStyle:'full', timeStyle:'short'}) + '. ' +
     (locLine() ? 'Der Nutzer befindet sich gerade in: ' + locLine() + '. Du darfst ihm das auf Nachfrage sagen. ' : '') +
-    (newsCtx ? 'Aktuelle Meldungen der letzten 24 Stunden:\n' + newsCtx + '\nWenn der Nutzer nach Nachrichten fragt, nenne die 4 bis 5 wichtigsten Weltereignisse in kurzen Sätzen.\n' : '') +
+    (newsCtx ? 'Aktuelle Meldungen der letzten 24 Stunden:\n' + newsCtx + '\nWenn der Nutzer nach Nachrichten fragt: Fasse genau die ' + newsN + ' wichtigsten Ereignisse zusammen (bei nummerierten Meldungen die Nummern 1 bis ' + newsN + '), je ein bis zwei kurze Sätze, ohne Nummern zu nennen. Passende Bilder zeigt die App selbst.\n' : '') +
     (wxLine() ? 'Aktuelles Wetter am Standort: ' + wxLine() + '. ' : '') +
     (hubText() ? 'Echte aktuelle Daten:\n' + hubText() : '') + (wissen ? 'Weiteres Wissen über den Nutzer:\n' + wissen + '\n' : '') +
     (notes.length ? 'Das hat der Nutzer dir beigebracht (Einträge mit [Regel] musst du immer befolgen):\n' + notes.join('\n') + '\n' : '') +
@@ -620,16 +632,18 @@ async function askGemini(text){
 async function handle(text){
   busy = true;
   stopListening();
+  newsItems = []; hudNews = [];
   add(text, 'me');
   setState('thinking', 'Jarvis denkt nach …');
   try{
     let answer = await localCommand(text);
     if(answer === null){
-      if(NEWS.test(text)){ setState('thinking', 'Hole Nachrichten …'); newsCtx = await getNews(); }
+      if(NEWS.test(text)){ setState('thinking', 'Hole Nachrichten …'); const nw = await getNews(text); newsCtx = nw.text; newsItems = nw.items; }
       try{ answer = await askGemini(BRIEF.test(text) ? BRIEF_Q : text); } finally{ newsCtx = ''; }
     }
     else history.push({role:'user', parts:[{text}]}, {role:'model', parts:[{text:answer}]});
     add(answer, 'ai');
+    if(newsItems.length){ addNews(newsItems); newsItems = []; }
     setState('speaking', 'Jarvis spricht … (tippe aufs Mikrofon zum Unterbrechen)');
     await speak(answer);
   }catch(e){ add('Fehler: ' + e.message, 'sys'); }
@@ -680,6 +694,7 @@ function startRec(){
     for(let i = e.resultIndex; i < e.results.length; i++){
       const r = e.results[i], t = r[0].transcript.trim();
       if(!t) continue;
+      pulse = 1;
       if(!r.isFinal){
         if(Date.now() < awakeUntil || WAKE.test(t)) setState('listening', '„' + t + '“');
       } else processFinal(t);
@@ -863,27 +878,59 @@ function stopLive(msg){
 }
 document.addEventListener('visibilitychange', () => { if(document.hidden && live) stopLive('Live-Gespräch pausiert, weil die Seite im Hintergrund war.'); });
 
-/* ---------- Hintergrund: HUD mit echtem Audio-Spektrum ---------- */
+/* ---------- Hintergrund: neues HUD (3D-Orb, Nachrichten-Ring, Wortpartikel) ---------- */
 const cv = $('bg'), g = cv.getContext('2d');
 const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const THEMES = {cyan:[76,201,240], gold:[255,176,59], green:[90,230,150], violet:[176,128,255]};
 const COL = {'':THEMES.cyan.slice(), listening:[255,107,107], thinking:[244,201,93], speaking:[123,216,143]};
 const NRG = {'':.25, listening:.65, thinking:.5, speaking:1};
-let W, H, t = 0, px = 0, py = 0, tx = 0, ty = 0, energy = .25, hue = [76,201,240], boot = 0;
+const SPIN = {'':.25, listening:.12, thinking:1.6, speaking:.55};
+let W, H, t = 0, tx = 0, ty = 0, px = 0, py = 0, energy = .25, hue = [76,201,240], boot = 0, BT = 0, pulse = 0;
+let CX = 0, CY = 0, CR = 100, rotY = 0, tilt = .35, spinV = .25, kick = 0, dragging = false, moved = 0, lastX = 0, lastY = 0, lastRip = 0, pendingOpen = '', lastT = performance.now();
+let hudNews = [], newsAt = 0, focusIdx = 0, manualUntil = 0, ringRot = 0, cardRects = [];
 function applyTheme(n){ const c = THEMES[n] || THEMES.cyan; COL[''] = c.slice(); document.documentElement.style.setProperty('--accent', 'rgb(' + c.join(',') + ')'); }
 applyTheme(store.get('jv_theme'));
-const ripples = [], bars = new Float32Array(96);
-const pts = Array.from({length:60}, () => ({x:Math.random(), y:Math.random(), vx:(Math.random()-.5)*.00025, vy:(Math.random()-.5)*.00025}));
+const ripples = [], wp = [];
+const NP = 240;
+const sph = Array.from({length:NP}, (_, i) => { const y = 1 - 2*(i + .5)/NP, r = Math.sqrt(1 - y*y), a = i*2.399963; return {x:Math.cos(a)*r, y, z:Math.sin(a)*r, ph:Math.random()*6.283}; });
+const links = []; for(let i = 0; i < NP; i++){ if(i + 1 < NP) links.push([i, i+1]); if(i + 27 < NP) links.push([i, i+27]); }
+const PR = Array.from({length:NP}, () => ({X:0, Y:0, z:0}));
+const pts = Array.from({length:50}, () => ({x:Math.random(), y:Math.random(), vx:(Math.random()-.5)*.00025, vy:(Math.random()-.5)*.00025}));
+function emitWords(text, dir){
+  try{ text.split(/\s+/).filter(Boolean).slice(0, 14).forEach((w, i) => setTimeout(() => { if(wp.length < 40) wp.push({w:w.slice(0, 18), a:Math.random()*6.283, r:dir > 0 ? .35 : 2.6, dir, off:(Math.random() - .5)*.5}); }, i*140)); }catch(e){}
+}
+function addNews(items){
+  hudNews = items.map(x => { const o = {title:x.title, url:x.url, ok:false, im:new Image()}; o.im.referrerPolicy = 'no-referrer'; o.im.onload = () => { o.ok = true; }; o.im.src = x.img; return o; });
+  newsAt = Date.now(); focusIdx = 0; manualUntil = 0;
+}
 function resize(){
   const d = Math.min(devicePixelRatio || 1, 2);
   W = innerWidth; H = innerHeight;
-  cv.width = W*d; cv.height = H*d; cv.style.width = W+'px'; cv.style.height = H+'px';
+  cv.width = W*d; cv.height = H*d; cv.style.width = W + 'px'; cv.style.height = H + 'px';
   g.setTransform(d,0,0,d,0,0);
 }
 addEventListener('resize', resize); resize();
-function move(e){ const p = e.touches ? e.touches[0] : e; tx = (p.clientX/W - .5); ty = (p.clientY/H - .5); }
-addEventListener('pointermove', move);
-addEventListener('pointerdown', e => { move(e); ripples.push({x:e.clientX, y:e.clientY, r:0}); });
+addEventListener('pointerdown', e => {
+  if(e.target.closest && e.target.closest('button,input,textarea,select,label,#settings,.msg')) return;
+  const x = e.clientX, y = e.clientY; moved = 0; lastX = x; lastY = y; pendingOpen = '';
+  for(let i = cardRects.length - 1; i >= 0; i--){
+    const r = cardRects[i];
+    if(x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h){
+      if(r.front){ pendingOpen = (hudNews[r.i] && hudNews[r.i].url) || ''; }
+      else { focusIdx = r.i; manualUntil = Date.now() + 20000; }
+      ripples.push({x, y, r:0}); return;
+    }
+  }
+  dragging = true; ripples.push({x, y, r:0});
+  if(Math.hypot(x - CX, y - CY) < CR*.7) pulse = 1;
+});
+addEventListener('pointermove', e => {
+  if(!dragging){ tx = e.clientX/W - .5; ty = e.clientY/H - .5; return; }
+  const dx = e.clientX - lastX, dy = e.clientY - lastY; lastX = e.clientX; lastY = e.clientY;
+  rotY += dx*.008; tilt = Math.max(-.9, Math.min(.9, tilt + dy*.006)); kick = dx*.06; moved += Math.abs(dx) + Math.abs(dy);
+});
+const endDrag = () => { dragging = false; if(pendingOpen && moved < 8){ try{ window.open(pendingOpen, '_blank', 'noopener'); }catch(e){} } pendingOpen = ''; };
+addEventListener('pointerup', endDrag); addEventListener('pointercancel', endDrag);
 const rgba = (c,a) => 'rgba(' + (c[0]|0) + ',' + (c[1]|0) + ',' + (c[2]|0) + ',' + a + ')';
 function spectrum(){
   if(!live || !live.anIn) return null;
@@ -898,114 +945,134 @@ function panel(x, y, w, h, title, c){
   g.fillStyle = rgba(c,.07); g.fillRect(x,y,w,h);
   g.fillStyle = rgba(c,.65); g.font = '11px ui-monospace, Menlo, monospace'; g.fillText(title, x+10, y+16);
 }
+function rr(x, y, w, h, r){ g.beginPath(); g.moveTo(x+r, y); g.arcTo(x+w, y, x+w, y+h, r); g.arcTo(x+w, y+h, x, y+h, r); g.arcTo(x, y+h, x, y, r); g.arcTo(x, y, x+w, y, r); g.closePath(); }
+function wrapLines(txt, maxW, maxL){
+  const out = []; let line = '';
+  for(const w of txt.split(' ')){ const tt = line ? line + ' ' + w : w; if(g.measureText(tt).width > maxW && line){ out.push(line); line = w; } else line = tt; }
+  if(line) out.push(line);
+  if(out.length > maxL){ out.length = maxL; out[maxL-1] += '…'; }
+  return out;
+}
+function drawCard(i, x, y, sc, al, hot, c, CW, CH){
+  const cd = hudNews[i], w = CW*sc, h = CH*sc, x0 = x - w/2, y0 = y - h/2, ih = h*.55;
+  g.save(); g.globalAlpha = al*BT;
+  if(hot){ g.shadowColor = rgba(c,.8); g.shadowBlur = 24; }
+  rr(x0, y0, w, h, 10*sc); g.fillStyle = 'rgba(8,18,30,.92)'; g.fill(); g.shadowBlur = 0;
+  g.save(); rr(x0, y0, w, h, 10*sc); g.clip();
+  if(cd.ok && cd.im.naturalWidth){
+    const iw = cd.im.naturalWidth, ih0 = cd.im.naturalHeight, k = Math.max(w/iw, ih/ih0), sw = w/k, sh = ih/k;
+    g.drawImage(cd.im, (iw - sw)/2, (ih0 - sh)/2, sw, sh, x0, y0, w, ih);
+  } else { g.fillStyle = rgba(c,.12); g.fillRect(x0, y0, w, ih); }
+  g.restore();
+  g.fillStyle = 'rgba(223,246,255,.95)'; g.font = (11.5*sc) + 'px -apple-system, Helvetica, Arial, sans-serif'; g.textAlign = 'left';
+  wrapLines(cd.title, w - 16*sc, 3).forEach((l, k) => g.fillText(l, x0 + 8*sc, y0 + ih + 14*sc + k*13*sc));
+  rr(x0, y0, w, h, 10*sc); g.strokeStyle = rgba(c, hot ? .95 : .5); g.lineWidth = hot ? 2 : 1; g.stroke();
+  g.restore();
+  return {x:x0, y:y0, w, h};
+}
 function frame(){
-  t += reduce ? .002 : .016;
-  boot = Math.min(1, boot + (reduce ? 1 : .0075)); const bt = 1 - Math.pow(1 - boot, 3);
+  const nowMs = performance.now(), dt = Math.min(.05, (nowMs - lastT)/1000); lastT = nowMs;
+  t += reduce ? dt*.15 : dt;
+  boot = Math.min(1, boot + (reduce ? 1 : dt/2.2)); const bt = 1 - Math.pow(1 - boot, 3); BT = bt;
   const tc = COL[STATE] || COL[''];
   for(let i=0;i<3;i++) hue[i] += (tc[i]-hue[i])*.06;
-  const spec = spectrum(); let lvl = 0;
+  const c = hue, spec = spectrum(); let lvl = 0;
   if(spec){ for(let i=0;i<32;i++) lvl += spec[i]; lvl /= 32*255; }
-  const target = spec ? Math.min(1, .25 + lvl*3.2) : (NRG[STATE] ?? .25);
-  energy += (target - energy)*(spec ? .2 : .05);
+  pulse *= Math.pow(.9, dt*60);
+  const target = spec ? Math.min(1, .25 + lvl*3.2) : Math.min(1, (NRG[STATE] ?? .25) + pulse*.4);
+  energy += (target - energy)*(spec ? .2 : .08);
   px += (tx-px)*.06; py += (ty-py)*.06;
-  const c = hue, sp = reduce ? .1 : 1;
-  g.clearRect(0,0,W,H);
-  g.textAlign = 'left';
-  const cx = W/2 + px*30, cy = H*.36 + py*30, R = Math.min(W*.42, H*.3) * (.35 + .65*bt);
-  g.globalAlpha = bt;
+  spinV += ((SPIN[STATE] ?? .25) - spinV)*.05; kick *= Math.pow(.94, dt*60);
+  rotY += (spinV*(reduce ? .2 : 1) + kick*10)*dt;
+  if(hudNews.length && Date.now() - newsAt > 300000) hudNews = [];
+  const N = hudNews.length, sr = $('stage').getBoundingClientRect(), A = sr.height + 80;
+  const R = Math.min(W*.3, A*(N ? .27 : .36)) * (.4 + .6*bt);
+  const cx = W/2 + px*20, cy = sr.top + A*(N ? .4 : .5) - 30 + py*20;
+  CX = cx; CY = cy; CR = R;
+  g.clearRect(0,0,W,H); g.textAlign = 'left'; g.globalAlpha = 1;
   const bgG = g.createRadialGradient(cx,cy,0,cx,cy,Math.max(W,H)*.7);
   bgG.addColorStop(0, rgba(c,.12+energy*.1)); bgG.addColorStop(1, 'rgba(5,11,20,0)');
   g.fillStyle = bgG; g.fillRect(0,0,W,H);
-  // Raster
-  g.fillStyle = rgba(c,.12);
+  g.fillStyle = rgba(c,.1);
   for(let x=(px*-20)%48; x<W; x+=48) for(let y=(py*-20)%48; y<H; y+=48) g.fillRect(x,y,1.5,1.5);
-  // Datenstrom am Rand
-  if(W >= 700){
-    g.font = '11px ui-monospace, Menlo, monospace';
-    for(let k=0;k<8;k++){
-      const x = k < 4 ? 250 + k*16 : W - 250 - (k-4)*16;
-      for(let j=0;j<16;j++){
-        const s = Math.floor(Math.abs(Math.sin(k*78.2 + j*12.9 + Math.floor(t*(2+k%3)))*43758)) % 16;
-        g.fillStyle = rgba(c, .05 + .1*((j + t*8*(k%2?1:-1) + k*3) % 16 + 16) % 16 / 16 * .6);
-        g.fillText(s.toString(16).toUpperCase(), x, H*.12 + j*14);
-      }
-    }
-  }
-  // Partikel
+  // Partikelnetz: zieht sich beim Zuhören zum Orb, weicht beim Sprechen aus
+  const dirF = STATE === 'listening' ? 1 : STATE === 'speaking' ? -1 : 0, cxn = cx/W, cyn = cy/H;
   g.lineWidth = 1;
   pts.forEach(p => {
-    p.x += p.vx*sp*16; p.y += p.vy*sp*16;
+    p.vx += (cxn - p.x)*dirF*.00002 + (Math.random()-.5)*.00002; p.vy += (cyn - p.y)*dirF*.00002 + (Math.random()-.5)*.00002;
+    p.vx = Math.max(-.002, Math.min(.002, p.vx*.998)); p.vy = Math.max(-.002, Math.min(.002, p.vy*.998));
+    p.x += p.vx*16*(reduce ? .1 : 1); p.y += p.vy*16*(reduce ? .1 : 1);
     if(p.x<0||p.x>1) p.vx *= -1; if(p.y<0||p.y>1) p.vy *= -1;
     const X = p.x*W + px*40, Y = p.y*H + py*40;
     g.fillStyle = rgba(c,.5); g.beginPath(); g.arc(X,Y,1.6,0,6.283); g.fill();
     pts.forEach(q => { const dx = X-(q.x*W+px*40), dy = Y-(q.y*H+py*40), d = dx*dx+dy*dy;
       if(d<9000 && q!==p){ g.strokeStyle = rgba(c,.12*(1-d/9000)); g.beginPath(); g.moveTo(X,Y); g.lineTo(q.x*W+px*40,q.y*H+py*40); g.stroke(); } });
   });
-  // Ringe
-  const spin = (STATE === 'thinking' ? 3 : 1) * sp;
-  [[.55,6,.35,1,2],[.7,10,.5,-1,1.5],[.85,3,.25,1,2.5],[1,40,.9,-1,1]].forEach(([k,n,fill,dir,w],i) => {
-    g.strokeStyle = rgba(c,.35+energy*.35); g.lineWidth = w;
+  // Nachrichten-Ring: Position und Drehung
+  const CW = W < 700 ? 150 : 190, CH = CW*.695, yc = cy + R*.55, RX = Math.min(W*(W < 700 ? .32 : .27), R*2.1), RY = R*.5;
+  const speakingNow = STATE === 'speaking', manual = Date.now() < manualUntil;
+  let cards = [];
+  if(N){
+    if(manual || speakingNow){
+      if(speakingNow && !manual) focusIdx = Math.min(N-1, Math.floor((Date.now() - newsAt)/5500));
+      if(N > 1){ const d = ((Math.PI/2 - focusIdx*6.283/N - ringRot + 9.4248) % 6.283) - 3.1416; ringRot += d*.08; }
+    } else ringRot += .12*dt;
+    cards = hudNews.map((cd, i) => {
+      const a = N === 1 ? Math.PI/2 : i*6.283/N + ringRot, dep = Math.sin(a);
+      return {i, x:cx + Math.cos(a)*(N === 1 ? 0 : RX), y:yc + dep*(N === 1 ? RY : RY), dep, sc:.62 + .38*(dep+1)/2, al:.45 + .55*(dep+1)/2};
+    }).sort((a, b) => a.dep - b.dep);
+    g.strokeStyle = rgba(c,.18); g.lineWidth = 1; g.beginPath(); g.ellipse(cx, yc, RX, RY, 0, 0, 6.283); g.stroke();
+  }
+  cardRects = [];
+  const showCard = k => { const hot = k.dep > .92 || (k.i === focusIdx && (manual || speakingNow)); const r = drawCard(k.i, k.x, k.y, k.sc, k.al, hot, c, CW, CH); r.i = k.i; r.front = k.dep > .85; cardRects.push(r); };
+  cards.filter(k => k.dep < 0).forEach(showCard);
+  // Orb: 3D-Punktkugel
+  g.globalAlpha = bt;
+  const glow = g.createRadialGradient(cx,cy,0,cx,cy,R*.95);
+  glow.addColorStop(0, rgba(c,.28 + energy*.3)); glow.addColorStop(1, rgba(c,0));
+  g.fillStyle = glow; g.beginPath(); g.arc(cx,cy,R*.95,0,6.283); g.fill();
+  const co = Math.cos(rotY), si = Math.sin(rotY), ct = Math.cos(tilt), st = Math.sin(tilt);
+  const base = R*.5*(STATE === 'listening' ? .93 : 1);
+  for(let i=0;i<NP;i++){
+    const p = sph[i], band = Math.min(31, Math.floor((p.y*.5 + .5)*26)), sv = spec ? spec[band]/255 : 0, wob = Math.sin(p.ph + t*3 + p.y*4)*.5 + .5;
+    const d = base*(1 + energy*.2*wob + sv*.55 + pulse*.12*wob);
+    const x0 = p.x*d, y0 = p.y*d, z0 = p.z*d, x1 = x0*co + z0*si, z1 = -x0*si + z0*co, y1 = y0*ct - z1*st, z2 = y0*st + z1*ct, k = 1/(1 - z2/(R*3));
+    const q = PR[i]; q.X = cx + x1*k; q.Y = cy + y1*k; q.z = z2/d;
+  }
+  g.lineWidth = 1; g.strokeStyle = rgba(c, STATE === 'thinking' ? .32 : .13); g.beginPath();
+  for(const [a, b] of links){ g.moveTo(PR[a].X, PR[a].Y); g.lineTo(PR[b].X, PR[b].Y); }
+  g.stroke();
+  for(let i=0;i<NP;i++){ const q = PR[i], dep = (q.z + 1)/2, sz = 1 + dep*1.9; g.fillStyle = rgba(c, (.25 + .75*dep)*(.7 + energy*.3)); g.fillRect(q.X - sz/2, q.Y - sz/2, sz, sz); }
+  g.lineWidth = 1.5; g.strokeStyle = rgba(c,.35 + energy*.3);
+  [[.78,3,.55,1],[.92,24,.5,-1]].forEach(([k, n, f, dir], ii) => {
     const seg = 6.283/n;
-    for(let j=0;j<n;j++){
-      const a0 = j*seg + t*dir*spin*(.35+i*.18);
-      g.beginPath(); g.arc(cx,cy,R*k,a0,a0+seg*fill); g.stroke();
-    }
+    for(let j=0;j<n;j++){ const a0 = j*seg + t*dir*(STATE === 'thinking' ? 2.5 : .5)*(ii ? .6 : 1); g.beginPath(); g.arc(cx, cy, R*k, a0, a0 + seg*f); g.stroke(); }
   });
-  // Radar-Sweep mit Schweif
-  const sw = t*1.4*sp;
-  g.lineWidth = 2;
-  for(let i=0;i<28;i++){
-    g.strokeStyle = rgba(c,.28*(1-i/28)); g.beginPath(); g.arc(cx,cy,R*.78,sw-i*.035-.035,sw-i*.035); g.stroke();
-  }
-  g.strokeStyle = rgba(c,.8); g.beginPath(); g.moveTo(cx+Math.cos(sw)*R*.46, cy+Math.sin(sw)*R*.46); g.lineTo(cx+Math.cos(sw)*R*.78, cy+Math.sin(sw)*R*.78); g.stroke();
-  // Skala
-  g.strokeStyle = rgba(c,.5); g.lineWidth = 1;
-  for(let i=0;i<72;i++){
-    const a = i/72*6.283 - t*.08*sp, l = i%6 ? 5 : 12;
-    g.beginPath(); g.moveTo(cx+Math.cos(a)*R*1.12, cy+Math.sin(a)*R*1.12); g.lineTo(cx+Math.cos(a)*(R*1.12+l), cy+Math.sin(a)*(R*1.12+l)); g.stroke();
-  }
-  // Spektrumring: echtes Audio im Live-Modus, sonst simuliert
-  g.strokeStyle = rgba(c,.85); g.lineWidth = 2.5; g.lineCap = 'round';
-  for(let i=0;i<96;i++){
-    const a = i/96*6.283 - 1.57, k = i < 48 ? i : 95 - i;
-    const w = (Math.sin(a*5+t*4*sp)+Math.sin(a*9-t*3*sp))*.5;
-    const v = spec ? spec[Math.min(31, Math.floor(k/48*26))]/255 : energy*(.35+.65*Math.abs(w));
-    bars[i] += (v - bars[i])*.35;
-    const l = 3 + bars[i]*R*.55;
-    g.beginPath(); g.moveTo(cx+Math.cos(a)*R*.42, cy+Math.sin(a)*R*.42); g.lineTo(cx+Math.cos(a)*(R*.42+l), cy+Math.sin(a)*(R*.42+l)); g.stroke();
-  }
-  g.lineCap = 'butt';
-  // Kern
-  const cr = R*.26*(1+.07*Math.sin(t*(2+energy*4))*energy*1.5 + lvl*.5);
-  const core = g.createRadialGradient(cx,cy,0,cx,cy,cr*2.4);
-  core.addColorStop(0,'rgba(255,255,255,.95)'); core.addColorStop(.25, rgba(c,.9)); core.addColorStop(1, rgba(c,0));
-  g.fillStyle = core; g.beginPath(); g.arc(cx,cy,cr*2.4,0,6.283); g.fill();
-  g.strokeStyle = rgba(c,.95); g.lineWidth = 2;
-  g.beginPath();
-  for(let i=0;i<3;i++){ const a = i*2.094 + t*.5*sp - 1.57; g.lineTo(cx+Math.cos(a)*cr*1.1, cy+Math.sin(a)*cr*1.1); }
-  g.closePath(); g.stroke();
-  g.beginPath(); g.arc(cx,cy,cr*1.25,0,6.283); g.stroke();
-  // Scanlinie
-  const sy = (t*70*sp) % (H+80) - 40;
-  const sl = g.createLinearGradient(0,sy-30,0,sy);
-  sl.addColorStop(0, rgba(c,0)); sl.addColorStop(1, rgba(c,.07));
-  g.fillStyle = sl; g.fillRect(0,sy-30,W,30);
-  // Tipp-Wellen
-  for(let i=ripples.length-1;i>=0;i--){
-    const r = ripples[i]; r.r += 5;
-    if(r.r > 260){ ripples.splice(i,1); continue; }
-    g.strokeStyle = rgba(c,.6*(1-r.r/260)); g.lineWidth = 2; g.beginPath(); g.arc(r.x,r.y,r.r,0,6.283); g.stroke();
-  }
   g.globalAlpha = 1;
-  // Anzeigen
-  const now = new Date();
-  const lbl = {'':'BEREIT', listening:'HÖRT ZU', thinking:'ANALYSE', speaking:'ANTWORTET'}[STATE] || 'BEREIT';
-  g.font = '12px ui-monospace, Menlo, monospace';
-  if(boot < 1){
-    g.fillStyle = rgba(c,.9*(1-boot)); g.textAlign = 'center'; g.fillText('SYSTEME WERDEN INITIALISIERT … ' + Math.round(boot*100) + ' %', W/2, cy + R*1.5); g.textAlign = 'left';
+  cards.filter(k => k.dep >= 0).forEach(showCard);
+  // Wellen: Tippen und Sprechen
+  if(pulse > .8 && t - lastRip > .25){ lastRip = t; ripples.push({x:cx, y:cy, r:R*.55}); }
+  for(let i = ripples.length - 1; i >= 0; i--){
+    const r = ripples[i]; r.r += 240*dt;
+    if(r.r > 280 + R){ ripples.splice(i,1); continue; }
+    g.strokeStyle = rgba(c, .5*(1 - r.r/(280 + R))); g.lineWidth = 2; g.beginPath(); g.arc(r.x, r.y, r.r, 0, 6.283); g.stroke();
   }
+  // Wortpartikel: gesprochene Worte fliegen in den Orb, Antworten heraus
+  g.font = '13px ui-monospace, Menlo, monospace'; g.textAlign = 'center';
+  for(let i = wp.length - 1; i >= 0; i--){
+    const w = wp[i]; w.r += (w.dir > 0 ? .55 : -.7)*dt;
+    if((w.dir > 0 && w.r > 2.7) || (w.dir < 0 && w.r < .3)){ wp.splice(i,1); continue; }
+    const al = w.dir > 0 ? Math.min(1, (2.7 - w.r)/1.2, (w.r - .3)/.3) : Math.min(1, (w.r - .3)/.4, (2.7 - w.r)/.3);
+    g.fillStyle = w.dir > 0 ? rgba(c, al*.9) : 'rgba(223,246,255,' + (al*.85) + ')';
+    g.fillText(w.w, cx + Math.cos(w.a + w.off)*w.r*R*1.1, cy + Math.sin(w.a + w.off)*w.r*R*.75);
+  }
+  g.textAlign = 'left';
+  // Anzeigen
+  const now = new Date(), lbl = {'':'BEREIT', listening:'HÖRT ZU', thinking:'ANALYSE', speaking:'ANTWORTET'}[STATE] || 'BEREIT';
+  g.font = '12px ui-monospace, Menlo, monospace';
+  if(boot < 1){ g.fillStyle = rgba(c,.9*(1-boot)); g.textAlign = 'center'; g.fillText('SYSTEME WERDEN INITIALISIERT … ' + Math.round(boot*100) + ' %', W/2, cy + R*1.5); g.textAlign = 'left'; }
   const L = [now.toLocaleDateString('de-DE', {weekday:'long', day:'numeric', month:'long'})];
-  if(loc && locLine()) L.push((loc.teil || loc.ort));
+  if(loc && locLine()) L.push(loc.teil || loc.ort);
   if(wx) L.push(wx.t + '°C ' + wxDesc(wx.code));
   timers.slice(0,3).forEach(x => L.push('TIMER ' + fmt(Math.max(0, Math.round((x.end - Date.now())/1000)))));
   const unread = hub && hub.mails ? hub.mails.filter(m => !m.gelesen).length : null;
@@ -1017,12 +1084,12 @@ function frame(){
     panel(18, 76, 230, 54 + L.length*16, '// ZEIT & LAGE', c);
     g.fillStyle = rgba(c,.95); g.font = '600 22px ui-monospace, Menlo, monospace'; g.fillText(now.toLocaleTimeString('de-DE'), 28, 110);
     g.font = '12px ui-monospace, Menlo, monospace'; g.fillStyle = rgba(c,.8);
-    L.forEach((s,i) => g.fillText(s.toUpperCase(), 28, 130 + i*16));
-    const rx = W - 248, rh = 40 + R2.length*16;
-    panel(rx, 76, 230, rh, '// STATUS', c);
+    L.forEach((s, i) => g.fillText(s.toUpperCase(), 28, 130 + i*16));
+    const rx = W - 248;
+    panel(rx, 76, 230, 40 + R2.length*16, '// STATUS', c);
     g.fillStyle = rgba(c,.95); g.font = '600 16px ui-monospace, Menlo, monospace'; g.fillText(R2[0], rx + 10, 104);
     g.font = '12px ui-monospace, Menlo, monospace'; g.fillStyle = rgba(c,.8);
-    R2.slice(1).forEach((s,i) => g.fillText(s, rx + 10, 124 + i*16));
+    R2.slice(1).forEach((s, i) => g.fillText(s, rx + 10, 124 + i*16));
   } else {
     g.fillStyle = rgba(c,.75);
     g.fillText(now.toLocaleTimeString('de-DE'), 18, 84); g.fillText(L[1] || 'SYSTEM ONLINE', 18, 100);
