@@ -460,33 +460,45 @@ const BRIEF_Q = 'Gib mir ein kurzes Morgenbriefing in höchstens fünf Sätzen: 
 
 /* ---------- Nachrichten der letzten 24 Stunden ---------- */
 const NEWS = /nachrichten|neuigkeiten|weltgeschehen|was gibt.?s neues|\bnews\b|letzten 24 stunden|wichtigste[nr]?\s+(ereignis|nachricht|meldung)|(passiert|los ist).*(welt|heute|gestern|stunden)|(welt|heute|gestern).*passiert/i;
+function dropNews(){ const tok = newsAt; setTimeout(() => { if(newsAt === tok) hudNews = []; }, 1200); }
+const PLACEQ = /passiert|los ist|\blos\b|neues|nachrichten|news|geschehen|vorgefallen|was gibt/i;
+function placeOf(q){
+  const m = q.match(/\b(?:in|aus|von|über)\s+(?!der\b|die\b|das\b|dem\b|den\b|meiner\b|unserer\b|einer\b|deiner\b|letzter\b)([a-zäöüß-]+(?:\s+[a-zäöüß-]+)?)/i);
+  if(!m) return '';
+  const drop = /^(passiert|los|gerade|heute|gestern|jetzt|aktuell|eigentlich|so|ist|war|denn|neues|nachrichten|zuletzt)$/i, out = [];
+  for(const w of m[1].split(/\s+/)){ if(drop.test(w)) break; out.push(w); }
+  return out.join(' ');
+}
 let newsCtx = '', newsN = 3, newsItems = [];
-async function getNews(q){
+async function getNews(q, ort){
   const mm = (q || '').toLowerCase().match(/\b(\d|ein|eine|einen|zwei|drei|vier|fünf)\s+(?:der\s+)?wichtigste/);
   newsN = Math.max(1, Math.min(5, mm ? (num(mm[1]) || 3) : 3));
   try{
     const ctl = new AbortController(), tm = setTimeout(() => ctl.abort(), 10000);
-    const r = await fetch('https://www.tagesschau.de/api2u/homepage/', {signal:ctl.signal}); clearTimeout(tm);
+    const url = ort ? 'https://www.tagesschau.de/api2u/search/?searchText=' + encodeURIComponent(ort) + '&resultPage=0&pageSize=12' : 'https://www.tagesschau.de/api2u/homepage/';
+    const r = await fetch(url, {signal:ctl.signal}); clearTimeout(tm);
     const d = await r.json(), since = Date.now() - 864e5;
-    let items = (d.news || []).filter(x => x.title);
-    const stories = items.filter(x => !x.type || x.type === 'story'); if(stories.length) items = stories;
+    let items = (ort ? (d.searchResults || []) : (d.news || [])).filter(x => x.title);
+    if(!ort){ const stories = items.filter(x => !x.type || x.type === 'story'); if(stories.length) items = stories; }
+    else items.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
     const recent = items.filter(x => !x.date || new Date(x.date).getTime() >= since);
-    items = (recent.length ? recent : items).slice(0, 14);
+    items = (recent.length && !ort ? recent : items).slice(0, 14);
     if(items.length){
       const pics = items.slice(0, newsN).map(x => {
         const v = (x.teaserImage && x.teaserImage.imageVariants) || {};
         const u = v['16x9-640'] || v['16x9-512'] || v['16x9-960'] || Object.values(v)[0];
         return u && /^https:\/\//.test(u) ? {title:x.title, img:u, url:/^https:\/\//.test(x.shareURL || '') ? x.shareURL : ''} : null;
       }).filter(Boolean);
-      return {text: items.map((x, i) => (i + 1) + '. ' + (x.topline ? x.topline + ': ' : '') + x.title + (x.firstSentence ? '. ' + x.firstSentence : '')).join('\n'), items: pics};
+      return {text: (ort ? 'Meldungen zu ' + ort + ' (neueste zuerst). Erzähle, was dort passiert ist:\n' : '') + items.map((x, i) => (i + 1) + '. ' + (x.topline ? x.topline + ': ' : '') + x.title + (x.firstSentence ? '. ' + x.firstSentence : '')).join('\n'), items: pics};
     }
   }catch(e){}
   const gk = store.get('jv_key');
   if(gk){
     try{
+      const frage = ort ? 'Was ist in den letzten 24 Stunden in ' + ort + ' passiert? Nenne die ' + newsN + ' wichtigsten Ereignisse.' : 'Nenne die ' + newsN + ' wichtigsten Weltnachrichten der letzten 24 Stunden.';
       const r = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + model() + ':generateContent', {
         method:'POST', headers:{'Content-Type':'application/json','x-goog-api-key':gk},
-        body: JSON.stringify({tools:[{google_search:{}}], contents:[{role:'user', parts:[{text:'Nenne die ' + newsN + ' wichtigsten Weltnachrichten der letzten 24 Stunden. Heute ist ' + new Date().toLocaleDateString('de-DE', {dateStyle:'full'}) + '. Kurze deutsche Stichpunkte, ohne Einleitung.'}]}]})
+        body: JSON.stringify({tools:[{google_search:{}}], contents:[{role:'user', parts:[{text: frage + ' Heute ist ' + new Date().toLocaleDateString('de-DE', {dateStyle:'full'}) + '. Kurze deutsche Stichpunkte, ohne Einleitung.'}]}]})
       });
       const d = await r.json();
       const t = d.candidates && d.candidates[0] && d.candidates[0].content.parts.map(p => p.text || '').join('');
@@ -638,7 +650,8 @@ async function handle(text){
   try{
     let answer = await localCommand(text);
     if(answer === null){
-      if(NEWS.test(text)){ setState('thinking', 'Hole Nachrichten …'); const nw = await getNews(text); newsCtx = nw.text; newsItems = nw.items; }
+      const ort = placeOf(text);
+      if(NEWS.test(text) || (ort && PLACEQ.test(text))){ setState('thinking', 'Hole Nachrichten …'); const nw = await getNews(text, ort); newsCtx = nw.text; newsItems = nw.items; }
       try{ answer = await askGemini(BRIEF.test(text) ? BRIEF_Q : text); } finally{ newsCtx = ''; }
     }
     else history.push({role:'user', parts:[{text}]}, {role:'model', parts:[{text:answer}]});
@@ -646,6 +659,7 @@ async function handle(text){
     if(newsItems.length){ addNews(newsItems); newsItems = []; }
     setState('speaking', 'Jarvis spricht … (tippe aufs Mikrofon zum Unterbrechen)');
     await speak(answer);
+    dropNews();
   }catch(e){ add('Fehler: ' + e.message, 'sys'); }
   busy = false;
   if(active){
@@ -773,8 +787,8 @@ function livePlay(data){
   const now = live.ctx.currentTime;
   if(live.next < now + 0.03) live.next = now + 0.06;
   src.start(live.next); live.next += buf.duration;
-  live.sources.add(src);
-  src.onended = () => { if(!live) return; live.sources.delete(src); if(!live.sources.size) setState('listening', 'Live: sprich einfach …'); };
+  live.sources.add(src); live.done = false;
+  src.onended = () => { if(!live) return; live.sources.delete(src); if(!live.sources.size){ setState('listening', 'Live: sprich einfach …'); if(live.done) dropNews(); } };
   setState('speaking', 'Jarvis spricht … (du kannst jederzeit unterbrechen)');
 }
 function liveStopPlayback(){
@@ -790,7 +804,7 @@ async function liveTool(tc){
     let res; const a = fc.args || {};
     try{
       if(fc.name === 'nachrichten'){
-        const n = Math.max(1, Math.min(5, parseInt(a.anzahl) || 3)), nw = await getNews(n + ' wichtigste');
+        const n = Math.max(1, Math.min(5, parseInt(a.anzahl) || 3)), nw = await getNews(n + ' wichtigste', String(a.ort || ''));
         if(nw.items.length) addNews(nw.items);
         res = {meldungen:nw.text, anweisung:'Fasse genau die ersten ' + n + ' Meldungen in je ein bis zwei kurzen Sätzen zusammen. Die Bilder zeigt die App.'};
       }else if(fc.name === 'standort_und_wetter'){
@@ -822,7 +836,7 @@ function liveMessage(m){
   if(sc.modelTurn && sc.modelTurn.parts){
     sc.modelTurn.parts.forEach(p => { if(p.inlineData && p.inlineData.data){ liveFlushIn(); livePlay(p.inlineData.data); } });
   }
-  if(sc.turnComplete){ liveFlushIn(); liveFlushOut(); }
+  if(sc.turnComplete){ liveFlushIn(); liveFlushOut(); live.done = true; if(!live.sources.size) dropNews(); }
 }
 async function startLive(){
   const key = store.get('jv_key');
@@ -838,7 +852,7 @@ async function startLive(){
     if(store.get('jv_hub') && Date.now() - hubAt > 120000){ await Promise.race([loadHub(false), new Promise(r => setTimeout(r, 6000))]); }
     const modelName = await findLiveModel(key);
     const ws = new WebSocket('wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=' + encodeURIComponent(key));
-    live = {ws, ctx, stream, model: modelName, ready:false, next:0, sources:new Set(), inTxt:'', outTxt:'', last:Date.now(), timer:null, src:null, proc:null, anIn:null, anOut:null};
+    live = {ws, ctx, stream, model: modelName, ready:false, next:0, sources:new Set(), inTxt:'', outTxt:'', last:Date.now(), timer:null, src:null, proc:null, anIn:null, anOut:null, done:false};
     $('start').hidden = true; $('wake').hidden = true; $('pill').hidden = false; $('pill').className = ''; $('pill').textContent = '● Live – tippen zum Beenden';
     ws.onopen = () => {
       ws.send(JSON.stringify({setup:{
@@ -846,7 +860,7 @@ async function startLive(){
         generationConfig:{responseModalities:['AUDIO'], speechConfig:{voiceConfig:{prebuiltVoiceConfig:{voiceName: store.get('jv_livevoice') || 'Charon'}}}},
         systemInstruction:{parts:[{text: systemText() + ' Du bist gerade in einem Live-Sprachgespräch. Sprich Deutsch, natürlich, ruhig und in kurzen Sätzen. Für Nachrichten, Standort, Wetter, Timer und Notizen benutzt du immer die passenden Werkzeuge und erfindest niemals Daten.'}]},
         tools:[{functionDeclarations:[
-          {name:'nachrichten', description:'Holt die wichtigsten aktuellen Weltnachrichten der letzten 24 Stunden und zeigt Bilder dazu. Immer benutzen, wenn der Nutzer nach Nachrichten, Neuigkeiten oder Ereignissen fragt.', parameters:{type:'OBJECT', properties:{anzahl:{type:'INTEGER', description:'Anzahl der Ereignisse, 1 bis 5, Standard 3'}}}},
+          {name:'nachrichten', description:'Holt die wichtigsten aktuellen Weltnachrichten der letzten 24 Stunden und zeigt Bilder dazu. Immer benutzen, wenn der Nutzer nach Nachrichten, Neuigkeiten oder Ereignissen fragt, auch wenn er nach einem bestimmten Ort fragt.', parameters:{type:'OBJECT', properties:{anzahl:{type:'INTEGER', description:'Anzahl der Ereignisse, 1 bis 5, Standard 3'}, ort:{type:'STRING', description:'Nur wenn der Nutzer nach einem bestimmten Ort fragt, z. B. Paris. Sonst leer lassen.'}}}},
           {name:'standort_und_wetter', description:'Liefert den aktuellen Standort des Nutzers und das Wetter dort.'},
           {name:'timer_stellen', description:'Stellt einen Timer.', parameters:{type:'OBJECT', properties:{sekunden:{type:'INTEGER'}}, required:['sekunden']}},
           {name:'notiz_speichern', description:'Merkt sich dauerhaft etwas, das der Nutzer gesagt hat.', parameters:{type:'OBJECT', properties:{text:{type:'STRING'}}, required:['text']}}
